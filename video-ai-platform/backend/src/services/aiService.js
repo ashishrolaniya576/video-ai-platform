@@ -1,0 +1,146 @@
+const axios = require('axios');
+const logger = require('../utils/logger');
+
+const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+
+const jobs = new Map();
+
+function createJob(jobId, videoUrl, features) {
+  const job = {
+    jobId,
+    videoUrl,
+    features,
+    status: 'accepted',
+    progress: 0,
+    currentStage: 'Queued',
+    outputVideo: null,
+    detectionSummary: null,
+    createdAt: new Date().toISOString(),
+    completedAt: null,
+  };
+  jobs.set(jobId, job);
+  logger.info(`[Job ${jobId}] Created for URL: ${videoUrl}`);
+  return job;
+}
+
+function getJob(jobId) {
+  return jobs.get(jobId) || null;
+}
+
+async function processJob(jobId, videoUrl, features, emitProgress) {
+  const job = jobs.get(jobId);
+  if (!job) return;
+
+  try {
+    // 1. Emit Processing Started
+    job.status = 'processing';
+    job.progress = 10;
+    job.currentStage = 'Running AI Pipeline on FastAPI';
+
+    emitProgress(jobId, {
+      jobId,
+      status: job.status,
+      progress: job.progress,
+      currentStage: job.currentStage,
+    });
+
+    // Log individual stage starts
+    if (features.stabilization) {
+      logger.info(`[Job ${jobId}] Video Stabilization Started...`);
+    }
+    if (features.heavyRainRemoval) {
+      logger.info(`[Job ${jobId}] Heavy Rain Removal Started...`);
+    }
+    if (features.videoVisibility) {
+      logger.info(`[Job ${jobId}] Video Visibility Enhancement Started...`);
+    }
+    if (features.objectDetection) {
+      logger.info(`[Job ${jobId}] Object Detection Started...`);
+    }
+
+    logger.info(`[Job ${jobId}] Calling FastAPI at ${AI_SERVICE_URL}/process`);
+
+    // 2. Call FastAPI — send the feature flags directly as the API expects
+    const payload = {
+      videoPath: videoUrl,
+      stabilization: Boolean(features.stabilization),
+      heavyRainRemoval: Boolean(features.heavyRainRemoval),
+      videoVisibility: Boolean(features.videoVisibility),
+      objectDetection: Boolean(features.objectDetection),
+    };
+
+    const response = await axios.post(`${AI_SERVICE_URL}/process`, payload, {
+      timeout: 30 * 60 * 1000, // 30 minutes — large videos can take significant time
+    });
+    const data = response.data;
+
+    if (data.status !== 'completed') {
+      throw new Error(data.error || 'Pipeline failed in FastAPI');
+    }
+
+    // 3. Log stage completions
+    if (features.stabilization) {
+      logger.info(`[Job ${jobId}] Video Stabilization Finished...`);
+    }
+    if (features.heavyRainRemoval) {
+      logger.info(`[Job ${jobId}] Heavy Rain Removal Finished...`);
+    }
+    if (features.videoVisibility) {
+      logger.info(`[Job ${jobId}] Video Visibility Enhancement Finished...`);
+    }
+    if (features.objectDetection) {
+      logger.info(`[Job ${jobId}] Object Detection Finished...`);
+    }
+
+    // 4. Build output URL
+    job.status = 'completed';
+    job.progress = 100;
+    job.currentStage = 'Completed';
+    job.completedAt = new Date().toISOString();
+
+    // Store detection summary if returned by FastAPI
+    if (data.detectionSummary && Object.keys(data.detectionSummary).length > 0) {
+      job.detectionSummary = data.detectionSummary;
+      logger.info(`[Job ${jobId}] Detection summary received: ${JSON.stringify(data.detectionSummary)}`);
+    }
+
+    // The FastAPI outputVideo is a local path like "output/heavy_rain_test.mp4".
+    // We construct a URL the frontend can use to stream it.
+    if (data.outputVideo) {
+      // e.g. "output/video.mp4" -> "/api/media/output/video.mp4"
+      const parts = data.outputVideo.split('output/');
+      const filename = parts.length > 1 ? parts[1] : data.outputVideo;
+      job.outputVideo = `http://localhost:5000/api/media/output/${filename}`;
+    }
+
+    logger.info(`[Job ${jobId}] Processing completed. Output: ${job.outputVideo}`);
+
+    emitProgress(jobId, {
+      jobId,
+      status: job.status,
+      progress: job.progress,
+      currentStage: job.currentStage,
+      detectionSummary: job.detectionSummary || null,
+    });
+
+    return job;
+
+  } catch (error) {
+    const errMsg = error.response?.data?.detail || error.message || 'Unknown error during AI processing';
+    logger.error(`[Job ${jobId}] Processing failed: ${errMsg}`);
+
+    job.status = 'failed';
+    job.currentStage = 'Failed';
+    job.completedAt = new Date().toISOString();
+
+    emitProgress(jobId, {
+      jobId,
+      status: job.status,
+      progress: job.progress,
+      currentStage: job.currentStage,
+      error: errMsg
+    });
+  }
+}
+
+module.exports = { createJob, getJob, processJob };

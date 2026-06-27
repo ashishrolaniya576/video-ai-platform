@@ -1,0 +1,79 @@
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+
+# Environment Variables
+.env
+.env.local
+
+# Output / Temp / Logs
+output/
+temp/
+logs/
+
+# AI Model Weights & Checkpoints
+weights/
+checkpoints/
+models_weights/
+pretrained/
+*.pth
+*.pt
+*.ckpt
+*.tar
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+# AI Service Virtual Environment
+ai-services/venv/
+
+# RAFT Repository
+ai-services/RAFT/
+
+# Heavy Rain Removal Repository
+ai-services/HeavyRainRemoval/
+
+# Model Weights
+ai-services/models_weights/
+ai-services/pretrained/
+
+# Output folders
+ai-services/output/
+
+# Frontend Build
+frontend/dist/
+
+# Backend Build
+backend/dist/
+
+# IDE
+.vscode/
+.idea/
+
+# Cache
+.cache/
+.pytest_cache/
+.mypy_cache/
+
+# Output Videos
+*.mp4
+*.avi
+*.mov
+*.mkv
+ai-services/PromptIR/
+ai-services/yt-dlp
