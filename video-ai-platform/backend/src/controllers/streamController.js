@@ -140,6 +140,7 @@ async function getResult(req, res, next) {
     res.json({
       status: 'completed',
       outputVideo: job.outputVideo,
+      detectionSummary: job.detectionSummary || null,
     });
   } catch (err) {
     next(err);

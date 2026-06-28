@@ -5,7 +5,7 @@ import StatusCard from '../components/StatusCard.jsx';
 import LogsPanel from '../components/LogsPanel.jsx';
 import OutputPanel from '../components/OutputPanel.jsx';
 import VideoInputPanel from '../components/VideoInputPanel.jsx';
-import { startProcessing, uploadVideoFile, downloadVideoUrl } from '../services/api.js';
+import { startProcessing, uploadVideoFile, downloadVideoUrl, getJobStatus, getJobResult } from '../services/api.js';
 import { subscribeToJob } from '../services/socket.js';
 
 const INITIAL_FEATURES = { stabilization: false, heavyRainRemoval: false, videoVisibility: false, objectDetection: false };
@@ -152,6 +152,45 @@ function Dashboard() {
         },
       });
 
+      // Fallback Polling Mechanism
+      // Safeguard in case WebSockets fail to connect, drop, or miss events due to race conditions.
+      let pollInterval = setInterval(async () => {
+        try {
+          const res = await getJobStatus(newJobId);
+          if (res.status === 'completed') {
+            clearInterval(pollInterval);
+            const resultRes = await getJobResult(newJobId);
+            setStatus('completed');
+            setProgress(100);
+            setCurrentStage('Completed');
+            setOutputVideo(resultRes.outputVideo);
+            if (resultRes.detectionSummary && Object.keys(resultRes.detectionSummary).length > 0) {
+              setDetectionSummary(resultRes.detectionSummary);
+            }
+            appendLog('Processing completed successfully.', 'success');
+            setProcessing(false);
+            unsubscribe();
+          } else if (res.status === 'failed') {
+            clearInterval(pollInterval);
+            setStatus('failed');
+            setApiError('Processing failed.');
+            appendLog(`Error: Processing failed on backend.`, 'error');
+            setProcessing(false);
+            unsubscribe();
+          } else {
+            // Update progress only if it's strictly greater than what we already have
+            setProgress((prev) => Math.max(prev, res.progress || 0));
+            if (res.currentStage) setCurrentStage(res.currentStage);
+            if (res.status) setStatus(res.status);
+          }
+        } catch (pollErr) {
+          // Ignore polling errors to prevent interrupting the flow if a single request fails
+        }
+      }, 2000);
+
+      // Clean up polling if the user resets
+      window.__currentJobPoll = pollInterval;
+
     } catch (err) {
       setStatus('failed');
       setApiError(err.message);
@@ -161,6 +200,10 @@ function Dashboard() {
   }, [inputSource, features, validate, resetState, appendLog]);
 
   const handleReset = useCallback(() => {
+    if (window.__currentJobPoll) {
+      clearInterval(window.__currentJobPoll);
+      window.__currentJobPoll = null;
+    }
     resetState();
     setInputSource(null);
     setFeatures(INITIAL_FEATURES);

@@ -43,17 +43,29 @@ function VideoPlayer({ src, title = 'Processed Video' }) {
     <div className="space-y-2 animate-fade-in">
       <div className="flex items-center justify-between">
         <p className="section-label">{title}</p>
-        <a
-          href={src}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-xs text-brand-400 hover:text-brand-300 flex items-center gap-1 transition-colors"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-          </svg>
-          Open
-        </a>
+        <div className="flex gap-3">
+          <a
+            href={src}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-brand-400 hover:text-brand-300 flex items-center gap-1 transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+            Open
+          </a>
+          <a
+            href={src}
+            download="processed_video.mp4"
+            className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1 transition-colors font-medium"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Download
+          </a>
+        </div>
       </div>
 
       <div className="relative bg-black rounded-xl overflow-hidden border border-surface-600 shadow-2xl">
