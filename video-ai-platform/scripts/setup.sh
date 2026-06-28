@@ -73,6 +73,22 @@ fi
 PYTHON_VER=$("$PYTHON_BIN" -c "import sys; print(sys.version.split()[0])")
 success "Python $PYTHON_VER found at $(command -v $PYTHON_BIN)"
 
+# ── ffmpeg ────────────────────────────────────────────────────────────────────
+if ! command -v ffmpeg &>/dev/null; then
+    warn "ffmpeg is not installed (required for video processing)."
+    if command -v apt-get &>/dev/null; then
+        info "Attempting to install ffmpeg via apt-get..."
+        sudo apt-get update && sudo apt-get install -y ffmpeg || warn "Failed to install ffmpeg automatically. Please install it manually."
+    elif command -v brew &>/dev/null; then
+        info "Attempting to install ffmpeg via Homebrew..."
+        brew install ffmpeg || warn "Failed to install ffmpeg automatically. Please install it manually."
+    else
+        warn "Please install ffmpeg manually (e.g. 'sudo apt install ffmpeg' or 'brew install ffmpeg')."
+    fi
+else
+    success "ffmpeg found"
+fi
+
 # ── Node.js ───────────────────────────────────────────────────────────────────
 if ! command -v node &>/dev/null; then
     error "Node.js is required but was not found."

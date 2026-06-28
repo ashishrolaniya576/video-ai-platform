@@ -54,7 +54,7 @@ video-ai-platform/
 - **Python >= 3.10**
 - **Node.js >= 18.x**
 - **npm >= 9.x**
-- **git** and **wget/curl**
+- **git**, **wget/curl**, and **ffmpeg** (required for browser video playback)
 - *Optional but recommended*: NVIDIA GPU with CUDA for faster inference.
 
 ---

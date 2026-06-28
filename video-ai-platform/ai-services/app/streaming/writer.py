@@ -9,6 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Tuple
 
+import subprocess
+import shutil
 import cv2
 import numpy as np
 
@@ -44,7 +46,8 @@ class VideoWriter:
             resolution:   (width, height) tuple.
             codec:        FourCC codec string. Defaults to 'mp4v'.
         """
-        self._output_path = Path(output_path)
+        self._final_output_path = Path(output_path)
+        self._output_path = self._final_output_path.with_name(f".tmp_{self._final_output_path.name}")
         self._fps = fps
         self._resolution = resolution  # (width, height)
         self._codec = codec
@@ -112,15 +115,40 @@ class VideoWriter:
         return None
 
     def release(self) -> None:
-        """Flush and release the underlying VideoWriter."""
+        """Flush and release the underlying VideoWriter and encode with FFmpeg."""
         if self._writer is not None:
             self._writer.release()
             self._writer = None
             logger.info(
-                "VideoWriter released: %s | %d frames written",
+                "OpenCV VideoWriter released: %s | %d frames written",
                 self._output_path,
                 self._frames_written,
             )
+            
+            if not shutil.which("ffmpeg"):
+                logger.error("FFmpeg not found in PATH! Please install ffmpeg (e.g. sudo apt install ffmpeg).")
+                logger.warning("Falling back to raw OpenCV video. This may not be playable in browsers.")
+                shutil.move(str(self._output_path), str(self._final_output_path))
+                return
+
+            logger.info("Encoding final video with FFmpeg for browser compatibility...")
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(self._output_path),
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart",
+                str(self._final_output_path)
+            ]
+            try:
+                subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                logger.info("FFmpeg encoding completed successfully: %s", self._final_output_path)
+                if self._output_path.exists():
+                    self._output_path.unlink()
+            except subprocess.CalledProcessError as e:
+                logger.error("FFmpeg encoding failed:\n%s", e.stderr.decode("utf-8", errors="ignore"))
+                logger.warning("Falling back to raw OpenCV video.")
+                shutil.move(str(self._output_path), str(self._final_output_path))
 
     # ── Writing ───────────────────────────────────────────────────────────────
 
@@ -162,4 +190,4 @@ class VideoWriter:
 
     @property
     def output_path(self) -> Path:
-        return self._output_path
+        return self._final_output_path
