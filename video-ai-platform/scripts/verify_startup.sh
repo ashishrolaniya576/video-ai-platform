@@ -74,7 +74,7 @@ else
     fi
 
     # Check each model in the health JSON
-    for model in "stabilize" "heavy_rain_remove" "video_visibility" "object_detection"; do
+    for model in "stabilization" "heavy_rain_removal" "video_visibility" "object_detection"; do
         if echo "$AI_HEALTH" | grep -q "\"$model\":true"; then
             log_pass "AI Model loaded: $model"
         else

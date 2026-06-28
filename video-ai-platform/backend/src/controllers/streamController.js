@@ -1,6 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 const logger = require('../utils/logger');
 const { createJob, getJob, processJob } = require('../services/aiService');
+const { cleanupTempFile } = require('../utils/videoDownloader');
 
 let io;
 
@@ -29,12 +30,37 @@ function emitProgress(jobId, data) {
 
 async function startProcessing(req, res, next) {
   try {
-    const { videoUrl, stabilization, heavyRainRemoval, videoVisibility, objectDetection } = req.body;
+    // Accept either a pre-saved local path (from /upload or /download-url)
+    // or a raw videoUrl for legacy compatibility.
+    const {
+      tempPath,
+      videoUrl,
+      stabilization,
+      heavyRainRemoval,
+      videoVisibility,
+      objectDetection,
+    } = req.body;
 
-    logger.info(`Request received: POST /api/process — URL: ${videoUrl}`);
+    const videoSource = (tempPath || videoUrl || '').trim();
+    const isTempFile = Boolean(tempPath && tempPath.trim());
 
-    if (!videoUrl || typeof videoUrl !== 'string' || videoUrl.trim() === '') {
-      return res.status(400).json({ error: 'videoUrl is required and must be a non-empty string.' });
+    if (isTempFile) {
+      const path = require('path');
+      const { TEMP_DIR } = require('../utils/videoDownloader');
+      const resolvedPath = path.resolve(videoSource);
+      if (!resolvedPath.startsWith(TEMP_DIR)) {
+        return res.status(403).json({ error: 'Invalid tempPath. Path traversal is not allowed.' });
+      }
+    }
+
+    logger.info(
+      `Request received: POST /api/process — source: ${isTempFile ? `tempPath:${tempPath}` : `url:${videoUrl}`}`
+    );
+
+    if (!videoSource) {
+      return res.status(400).json({
+        error: 'Either tempPath (from upload/download) or videoUrl is required.',
+      });
     }
 
     const hasFeature = stabilization || heavyRainRemoval || videoVisibility || objectDetection;
@@ -52,19 +78,26 @@ async function startProcessing(req, res, next) {
       objectDetection: Boolean(objectDetection),
     };
 
-    createJob(jobId, videoUrl.trim(), features);
+    createJob(jobId, videoSource, features, isTempFile);
     logger.info(`Job created: ${jobId}`);
 
     res.status(202).json({ jobId, status: 'accepted' });
 
     logger.info(`Calling AI service for job: ${jobId}`);
 
-    processJob(jobId, videoUrl.trim(), features, (jid, progressData) => {
+    processJob(jobId, videoSource, features, (jid, progressData) => {
       emitProgress(jid, progressData);
-    }).catch((err) => {
-      logger.error(`Job ${jobId} failed: ${err.message}`);
-      emitProgress(jobId, { jobId, status: 'failed', error: err.message });
-    });
+    })
+      .then(() => {
+        // Clean up temp file after successful processing
+        if (isTempFile) cleanupTempFile(videoSource);
+      })
+      .catch((err) => {
+        logger.error(`Job ${jobId} failed: ${err.message}`);
+        emitProgress(jobId, { jobId, status: 'failed', error: err.message });
+        // Clean up temp file even on failure
+        if (isTempFile) cleanupTempFile(videoSource);
+      });
   } catch (err) {
     next(err);
   }

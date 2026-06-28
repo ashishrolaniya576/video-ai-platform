@@ -45,7 +45,7 @@ class Settings(BaseSettings):
 
     # ── RAFT Stabilizer ───────────────────────────────────────
     raft_model_path: Path = Field(
-        default=Path("models_weights/raft-sintel.pth"), alias="RAFT_MODEL_PATH"
+        default=Path("RAFT/models/raft-sintel.pth"), alias="RAFT_MODEL_PATH"
     )
     raft_repo_path: Path = Field(
         default=Path("RAFT"), alias="RAFT_REPO_PATH"

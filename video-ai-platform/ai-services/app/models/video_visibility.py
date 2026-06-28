@@ -18,7 +18,10 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as transforms
-import pytorch_lightning as pl
+try:
+    import lightning as pl  # lightning>=2.0
+except ImportError:
+    import pytorch_lightning as pl  # type: ignore[no-redef]  # legacy
 
 from app.config.settings import settings
 from app.models.base import BaseModel
@@ -125,7 +128,7 @@ class VideoVisibilityModel(BaseModel):
         # Load weights
         logger.info("%s: loading weights from %s", self.name, ckpt_path)
         try:
-            checkpoint = torch.load(str(ckpt_path), map_location=torch_device)
+            checkpoint = torch.load(str(ckpt_path), map_location=torch_device, weights_only=False)
             if "state_dict" in checkpoint:
                 model.load_state_dict(checkpoint["state_dict"])
             else:

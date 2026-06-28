@@ -5,10 +5,11 @@ const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
 
 const jobs = new Map();
 
-function createJob(jobId, videoUrl, features) {
+function createJob(jobId, videoSource, features, isTempFile = false) {
   const job = {
     jobId,
-    videoUrl,
+    videoUrl: videoSource,
+    isTempFile,
     features,
     status: 'accepted',
     progress: 0,
@@ -19,7 +20,7 @@ function createJob(jobId, videoUrl, features) {
     completedAt: null,
   };
   jobs.set(jobId, job);
-  logger.info(`[Job ${jobId}] Created for URL: ${videoUrl}`);
+  logger.info(`[Job ${jobId}] Created — source: ${isTempFile ? 'localFile' : 'url'} — ${videoSource}`);
   return job;
 }
 
@@ -110,7 +111,7 @@ async function processJob(jobId, videoUrl, features, emitProgress) {
       // e.g. "output/video.mp4" -> "/api/media/output/video.mp4"
       const parts = data.outputVideo.split('output/');
       const filename = parts.length > 1 ? parts[1] : data.outputVideo;
-      job.outputVideo = `http://localhost:5000/api/media/output/${filename}`;
+      job.outputVideo = `/api/media/output/${filename}`;
     }
 
     logger.info(`[Job ${jobId}] Processing completed. Output: ${job.outputVideo}`);

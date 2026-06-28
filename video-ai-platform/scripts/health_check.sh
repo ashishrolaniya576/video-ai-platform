@@ -52,22 +52,22 @@ if curl -s http://localhost:8000/health >/dev/null; then
     JSON_RESP=$(curl -s http://localhost:8000/health)
     
     # We can use python to parse JSON safely if jq isn't available
-    python3 -c "
+    python3 -c '
 import sys, json
 try:
-    data = json.loads('''$JSON_RESP''')
-    print('  AI Status:       ' + data.get('status', 'unknown'))
-    print('  Compute Device:  ' + str(data.get('device', 'unknown')))
-    models = data.get('models_loaded', {})
+    data = json.load(sys.stdin)
+    print("  AI Status:       " + data.get("status", "unknown"))
+    print("  Compute Device:  " + str(data.get("device", "unknown")))
+    models = data.get("models_loaded", {})
     if models:
-        print('  Models Loaded:')
+        print("  Models Loaded:")
         for m, status in models.items():
-            print(f'    - {m}: {\"\\033[0;32m[PASS]\\033[0m\" if status else \"\\033[0;31m[FAIL]\\033[0m\"}')
+            print(f"    - {m}: {\"\033[0;32m[PASS]\033[0m\" if status else \"\033[0;31m[FAIL]\033[0m\"}")
     else:
-        print('  Models:          None loaded (or pipeline not active)')
+        print("  Models:          None loaded (or pipeline not active)")
 except Exception as e:
-    print('  Failed to parse AI health response')
-"
+    print("  Failed to parse AI health response")
+' <<< "$JSON_RESP"
 else
     echo -e "  ${RED}AI Service is unreachable. Make sure it is running.${RESET}"
 fi

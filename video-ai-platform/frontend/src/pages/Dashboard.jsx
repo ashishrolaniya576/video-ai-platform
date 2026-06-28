@@ -4,7 +4,8 @@ import ProgressBar from '../components/ProgressBar.jsx';
 import StatusCard from '../components/StatusCard.jsx';
 import LogsPanel from '../components/LogsPanel.jsx';
 import OutputPanel from '../components/OutputPanel.jsx';
-import { startProcessing } from '../services/api.js';
+import VideoInputPanel from '../components/VideoInputPanel.jsx';
+import { startProcessing, uploadVideoFile, downloadVideoUrl } from '../services/api.js';
 import { subscribeToJob } from '../services/socket.js';
 
 const INITIAL_FEATURES = { stabilization: false, heavyRainRemoval: false, videoVisibility: false, objectDetection: false };
@@ -17,14 +18,6 @@ const PIPELINE_LABELS = [
   { key: 'objectDetection',  label: 'Object Detection' },
 ];
 
-const SUPPORTED_PROTOCOLS = [
-  { label: 'RTSP', example: 'rtsp://...' },
-  { label: 'RTMP', example: 'rtmp://...' },
-  { label: 'HLS', example: 'http://.../playlist.m3u8' },
-  { label: 'HTTP Video', example: 'http://.../video.mp4' },
-  { label: 'MP4 URL', example: 'https://.../sample.mp4' },
-];
-
 function createLog(message, level = 'info') {
   const now = new Date();
   const timestamp = now.toLocaleTimeString('en-US', { hour12: false });
@@ -32,7 +25,11 @@ function createLog(message, level = 'info') {
 }
 
 function Dashboard() {
-  const [videoUrl, setVideoUrl] = useState('');
+  // ── Input source state ────────────────────────────────────────────────────
+  // inputSource: null | { type: 'file', file: File } | { type: 'url', url: string }
+  const [inputSource, setInputSource] = useState(null);
+
+  // ── Processing state ──────────────────────────────────────────────────────
   const [features, setFeatures] = useState(INITIAL_FEATURES);
   const [processing, setProcessing] = useState(false);
   const [jobId, setJobId] = useState(null);
@@ -42,7 +39,9 @@ function Dashboard() {
   const [logs, setLogs] = useState([]);
   const [outputVideo, setOutputVideo] = useState(null);
   const [detectionSummary, setDetectionSummary] = useState(null);
-  const [urlError, setUrlError] = useState('');
+
+  // ── Validation error state ─────────────────────────────────────────────────
+  const [sourceError, setSourceError] = useState('');
   const [featureError, setFeatureError] = useState('');
   const [apiError, setApiError] = useState('');
 
@@ -53,11 +52,11 @@ function Dashboard() {
   const validate = useCallback(() => {
     let valid = true;
 
-    if (!videoUrl.trim()) {
-      setUrlError('Video URL is required.');
+    if (!inputSource) {
+      setSourceError('Please select a video file or enter a video URL.');
       valid = false;
     } else {
-      setUrlError('');
+      setSourceError('');
     }
 
     const hasFeature = Object.values(features).some(Boolean);
@@ -69,7 +68,7 @@ function Dashboard() {
     }
 
     return valid;
-  }, [videoUrl, features]);
+  }, [inputSource, features]);
 
   const resetState = useCallback(() => {
     setProgress(0);
@@ -89,10 +88,29 @@ function Dashboard() {
     resetState();
     setProcessing(true);
     setStatus('accepted');
-    appendLog('Submitting job to server…', 'info');
+
+    let tempPath = null;
 
     try {
-      const data = await startProcessing({ videoUrl: videoUrl.trim(), ...features });
+      // ── Step 1: Upload file or download URL ─────────────────────────────
+      if (inputSource.type === 'file') {
+        appendLog(`Uploading "${inputSource.file.name}"…`, 'info');
+        const uploadResult = await uploadVideoFile(inputSource.file, (pct) => {
+          if (pct < 100) appendLog(`Upload progress: ${pct}%`, 'info');
+        });
+        tempPath = uploadResult.tempPath;
+        appendLog(`File uploaded successfully (${(uploadResult.sizeBytes / (1024 * 1024)).toFixed(1)} MB).`, 'success');
+      } else {
+        appendLog(`Downloading video from URL…`, 'info');
+        appendLog(`Source: ${inputSource.url}`, 'system');
+        const downloadResult = await downloadVideoUrl(inputSource.url);
+        tempPath = downloadResult.tempPath;
+        appendLog(`Video downloaded (${downloadResult.sourceType}, ${(downloadResult.sizeBytes / (1024 * 1024)).toFixed(1)} MB).`, 'success');
+      }
+
+      // ── Step 2: Submit processing job ───────────────────────────────────
+      appendLog('Submitting job to AI pipeline…', 'info');
+      const data = await startProcessing({ tempPath, ...features });
       const newJobId = data.jobId;
       setJobId(newJobId);
       appendLog(`Job accepted. ID: ${newJobId}`, 'success');
@@ -108,7 +126,6 @@ function Dashboard() {
           setProgress(payload.progress);
           setCurrentStage(payload.currentStage);
           setStatus(payload.status === 'completed' ? 'completed' : 'processing');
-
           const level = payload.currentStage.toLowerCase().includes('running') ? 'stage' : 'info';
           appendLog(`${payload.currentStage} — ${payload.progress}%`, level);
         },
@@ -134,19 +151,20 @@ function Dashboard() {
           unsubscribe();
         },
       });
+
     } catch (err) {
       setStatus('failed');
       setApiError(err.message);
-      appendLog(`Failed to start job: ${err.message}`, 'error');
+      appendLog(`Failed: ${err.message}`, 'error');
       setProcessing(false);
     }
-  }, [videoUrl, features, validate, resetState, appendLog]);
+  }, [inputSource, features, validate, resetState, appendLog]);
 
   const handleReset = useCallback(() => {
     resetState();
-    setVideoUrl('');
+    setInputSource(null);
     setFeatures(INITIAL_FEATURES);
-    setUrlError('');
+    setSourceError('');
     setFeatureError('');
     setProcessing(false);
   }, [resetState]);
@@ -173,43 +191,15 @@ function Dashboard() {
         <div className="xl:col-span-2 space-y-5">
           <form onSubmit={handleSubmit} noValidate id="processing-form">
             <div className="card-glow p-6 space-y-6">
-              {/* Video URL Input */}
-              <div className="space-y-2">
-                <label htmlFor="video-url-input" className="section-label block">
-                  Video Source
-                </label>
-                <input
-                  id="video-url-input"
-                  type="url"
-                  value={videoUrl}
-                  onChange={(e) => {
-                    setVideoUrl(e.target.value);
-                    if (urlError) setUrlError('');
-                  }}
-                  placeholder="https://example.com/video.mp4"
-                  className={`input-field ${urlError ? 'border-rose-600 focus:ring-rose-500' : ''}`}
-                  disabled={isSubmitDisabled}
-                  aria-describedby={urlError ? 'url-error' : undefined}
-                />
-                {urlError && (
-                  <p id="url-error" className="text-xs text-rose-400 flex items-center gap-1">
-                    <svg className="w-3.5 h-3.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                    </svg>
-                    {urlError}
-                  </p>
-                )}
 
-                <div className="flex flex-wrap gap-1.5 pt-1">
-                  {SUPPORTED_PROTOCOLS.map(({ label }) => (
-                    <span key={label} className="badge bg-surface-700 border border-surface-500 text-slate-500 text-xs">
-                      {label}
-                    </span>
-                  ))}
-                </div>
-              </div>
+              {/* ── Video Source Input ── */}
+              <VideoInputPanel
+                onSourceReady={setInputSource}
+                disabled={isSubmitDisabled}
+                externalError={sourceError}
+              />
 
-              {/* Feature Selection */}
+              {/* ── Feature Selection ── */}
               <FeaturePanel
                 features={features}
                 onChange={setFeatures}
@@ -224,21 +214,28 @@ function Dashboard() {
                 </p>
               )}
 
-              {/* API Error */}
+              {/* ── API Error ── */}
               {apiError && (
                 <div className="p-3 rounded-xl bg-rose-950/30 border border-rose-800 text-xs text-rose-300">
                   <strong>Error:</strong> {apiError}
                 </div>
               )}
 
-              {/* Dynamic Pipeline Preview */}
+              {/* ── Dynamic Pipeline Preview ── */}
               {activePipelineSteps.length > 0 && (
                 <div className="space-y-2">
                   <p className="section-label">Pipeline Preview</p>
                   <div className="flex flex-col gap-1.5">
                     {/* Input node */}
                     <div className="flex items-center gap-2">
-                      <span className="badge bg-surface-700 border-surface-500 text-slate-400">Input</span>
+                      <span className="badge bg-surface-700 border-surface-500 text-slate-400">
+                        {inputSource?.type === 'file'
+                          ? `📁 ${inputSource.file.name.length > 20 ? inputSource.file.name.slice(0, 17) + '…' : inputSource.file.name}`
+                          : inputSource?.type === 'url'
+                          ? '🔗 Video URL'
+                          : 'Input'
+                        }
+                      </span>
                     </div>
                     {activePipelineSteps.map(({ key, label }) => (
                       <div key={key} className="flex flex-col gap-1.5">
@@ -264,7 +261,7 @@ function Dashboard() {
                 </div>
               )}
 
-              {/* Action Buttons */}
+              {/* ── Action Buttons ── */}
               <div className="flex gap-3 pt-2">
                 <button
                   id="start-processing-btn"
@@ -285,7 +282,7 @@ function Dashboard() {
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z" />
                       </svg>
-                      Start Processing
+                      Process Video
                     </>
                   )}
                 </button>

@@ -1,14 +1,27 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
+const fs = require('fs');
 const streamRoutes = require('./routes/streamRoutes');
+const uploadRoutes = require('./routes/uploadRoutes');
 const logger = require('./utils/logger');
+
+// Ensure temp upload directory exists at startup
+const TEMP_DIR = path.resolve(
+  process.env.TEMP_UPLOAD_DIR || path.join(__dirname, '../uploads/temp')
+);
+if (!fs.existsSync(TEMP_DIR)) {
+  fs.mkdirSync(TEMP_DIR, { recursive: true });
+  logger.info(`[App] Created temp upload directory: ${TEMP_DIR}`);
+}
 
 const app = express();
 
 app.use(cors({ origin: '*' }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Increase JSON / URL-encoded body limits for large metadata payloads
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 app.use((req, res, next) => {
   logger.debug(`${req.method} ${req.originalUrl}`);
@@ -16,9 +29,9 @@ app.use((req, res, next) => {
 });
 
 app.use('/api', streamRoutes);
+app.use('/api', uploadRoutes);
 
 // Serve the ai-services output directory statically so the frontend can load the video
-const path = require('path');
 const mediaPath = path.join(__dirname, '../../../ai-services');
 app.use('/api/media', express.static(mediaPath));
 

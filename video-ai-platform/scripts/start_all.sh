@@ -44,7 +44,7 @@ else
     cd "$REPO_ROOT/ai-services"
     # shellcheck source=/dev/null
     source venv/bin/activate
-    nohup uvicorn app.main:create_app --host 0.0.0.0 --port 8000 --factory > "$LOGS_DIR/ai.log" 2>&1 &
+    nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-level info > "$LOGS_DIR/ai.log" 2>&1 &
     AI_PID=$!
     echo $AI_PID > "$PID_DIR/ai.pid"
     
@@ -63,6 +63,7 @@ if lsof -Pi :5000 -sTCP:LISTEN -t >/dev/null; then
     warn "Port 5000 is already in use. Backend might already be running."
 else
     cd "$REPO_ROOT/backend"
+    export YTDLP_BIN="$REPO_ROOT/ai-services/venv/bin/yt-dlp"
     nohup npm start > "$LOGS_DIR/backend.log" 2>&1 &
     BACKEND_PID=$!
     echo $BACKEND_PID > "$PID_DIR/backend.pid"
