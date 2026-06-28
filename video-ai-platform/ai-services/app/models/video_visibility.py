@@ -143,41 +143,19 @@ class VideoVisibilityModel(BaseModel):
         self._loaded = True
         logger.info("%s: Checkpoint Loaded. Model loaded successfully.", self.name)
 
-    def process(
+    def process_frame(
         self,
-        frames: List[np.ndarray],
-        fps: float,
+        frame: np.ndarray,
+        frame_idx: int,
         **kwargs: object,
-    ) -> List[np.ndarray]:
+    ) -> np.ndarray:
         self._assert_loaded()
 
-        if not frames:
-            return []
+        if frame_idx % 50 == 0:
+            logger.info("%s: Processing frame %d", self.name, frame_idx)
 
-        logger.info("%s: Processing Started on %d frames…", self.name, len(frames))
-        t_start = time.perf_counter()
-
-        processed_frames = []
-        for idx, frame in enumerate(frames):
-            logger.debug("%s: Current Frame %d", self.name, idx)
-            processed_frame = self._process_single_frame(frame)
-            processed_frames.append(processed_frame)
-            logger.debug("%s: Frame Completed %d", self.name, idx)
-
-            if (idx + 1) % 50 == 0:
-                logger.info("%s: processed %d/%d frames", self.name, idx + 1, len(frames))
-
-        elapsed = time.perf_counter() - t_start
-        h_out, w_out = processed_frames[0].shape[:2]
-        logger.info(
-            "%s: Execution Time — %d frames → %dx%d in %.2fs.",
-            self.name, len(processed_frames), w_out, h_out, elapsed,
-        )
-        return processed_frames
-
-    def _process_single_frame(self, frame_bgr: np.ndarray) -> np.ndarray:
         # OpenCV Frame -> RGB -> Tensor
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         img_tensor = transforms.ToTensor()(frame_rgb)
         
         # PromptIR Tiled Inference

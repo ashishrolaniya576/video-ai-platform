@@ -33,7 +33,15 @@ app.use('/api', uploadRoutes);
 
 // Serve the ai-services output directory statically so the frontend can load the video
 const mediaPath = path.join(__dirname, '../../ai-services');
-app.use('/api/media', express.static(mediaPath));
+app.use('/api/media', express.static(mediaPath, {
+  setHeaders: (res, path) => {
+    if (path.endsWith('.mp4')) {
+      res.setHeader('Content-Type', 'video/mp4');
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Cache-Control', 'public, max-age=31536000');
+    }
+  }
+}));
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found.' });

@@ -235,3 +235,50 @@ def build_output_path(source: str, output_dir: Path, suffix: str = "_processed")
         counter += 1
 
     return candidate
+
+def validate_output_video(path: str | Path) -> None:
+    """
+    Validate that the output video meets strict browser playback requirements:
+    Container: MP4, Codec: H.264, Pixel format: yuv420p.
+
+    Raises:
+        RuntimeError: If validation fails or ffprobe is unavailable.
+    """
+    import subprocess
+    import shutil
+
+    if not shutil.which("ffprobe"):
+        logger.warning("ffprobe not found, skipping strict output validation.")
+        return
+
+    path_str = str(path)
+    if not path_str.endswith(".mp4"):
+        raise RuntimeError(f"Output must be an MP4 file, got: {path_str}")
+
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=codec_name,pix_fmt",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        path_str
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        lines = result.stdout.strip().split("\n")
+        
+        if len(lines) < 2:
+            raise RuntimeError(f"Could not extract video stream info. Output: {result.stdout}")
+
+        codec, pix_fmt = lines[0].strip(), lines[1].strip()
+
+        if codec != "h264":
+            raise RuntimeError(f"Video codec must be h264, got '{codec}'")
+
+        if pix_fmt != "yuv420p":
+            raise RuntimeError(f"Pixel format must be yuv420p, got '{pix_fmt}'")
+
+        logger.info("Output video passed strict HTML5 validation (h264/yuv420p).")
+
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"ffprobe validation failed: {e.stderr}") from e

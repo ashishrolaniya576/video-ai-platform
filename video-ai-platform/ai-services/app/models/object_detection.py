@@ -129,111 +129,29 @@ class ObjectDetectionModel(BaseModel):
 
     # ── process ───────────────────────────────────────────────────────────────
 
-    def process(
+    def process_frame(
         self,
-        frames: List[np.ndarray],
-        fps: float,
+        frame: np.ndarray,
+        frame_idx: int,
         **kwargs: object,
-    ) -> List[np.ndarray]:
-        """
-        Run YOLO inference on every frame.
-
-        Draws bounding boxes, class names, and confidence scores on each frame.
-        After this call, self._last_detection_summary contains aggregated
-        per-class object counts across all frames.
-
-        Args:
-            frames: List of H×W×3 BGR uint8 numpy arrays.
-            fps:    Source video frame rate (unused by YOLO, kept for interface).
-
-        Returns:
-            Annotated frames as a list of H×W×3 BGR uint8 numpy arrays.
-        """
-        self._assert_loaded()
-
-        if not frames:
-            return []
-
-        logger.info("Object Detection Started")
-        logger.info("%s: processing %d frames…", self.name, len(frames))
-        t_start = time.perf_counter()
-
-        conf_thresh: float = float(kwargs.get("conf", settings.yolo_confidence_threshold))
-        iou_thresh: float = float(kwargs.get("iou", settings.yolo_iou_threshold))
-
-        # Reset detection summary for this request
-        class_counts: Dict[str, int] = defaultdict(int)
-
-        processed_frames: List[np.ndarray] = []
-
-        for idx, frame in enumerate(frames):
-            if (idx + 1) % 25 == 0 or idx == 0:
-                logger.info("%s: Processing Frame %d", self.name, idx + 1)
-
-            annotated, frame_counts = self._process_single_frame(
-                frame, conf_thresh, iou_thresh
-            )
-            processed_frames.append(annotated)
-
-            for cls_name, count in frame_counts.items():
-                class_counts[cls_name] += count
-
-        elapsed = time.perf_counter() - t_start
-        logger.info("Object Detection Finished")
-        logger.info("Saving Output Video")
-        logger.info(
-            "%s: Execution Time — %d frames processed in %.2fs.",
-            self.name, len(processed_frames), elapsed,
-        )
-
-        # Store summary so PipelineManager can retrieve it
-        self._last_detection_summary = dict(class_counts)
-
-        if self._last_detection_summary:
-            summary_str = ", ".join(
-                f"{k}: {v}" for k, v in sorted(self._last_detection_summary.items())
-            )
-            logger.info("%s: Detection summary — %s", self.name, summary_str)
-
-        return processed_frames
-
-    # ── cleanup ───────────────────────────────────────────────────────────────
-
-    def cleanup(self) -> None:
-        """Release GPU memory and reset state."""
-        if self._model is not None:
-            del self._model
-            self._model = None
-        self._last_detection_summary = {}
-        if self._device == "cuda":
-            try:
-                torch.cuda.empty_cache()
-                logger.debug("%s: CUDA cache cleared.", self.name)
-            except Exception:  # noqa: BLE001
-                pass
-        self._loaded = False
-        logger.info("%s: Model Closed and resources released.", self.name)
-
-    # ── private helpers ───────────────────────────────────────────────────────
-
-    def _process_single_frame(
-        self,
-        frame_bgr: np.ndarray,
-        conf_thresh: float,
-        iou_thresh: float,
-    ) -> tuple[np.ndarray, Dict[str, int]]:
+    ) -> np.ndarray:
         """
         Run inference on a single BGR frame and draw annotations.
 
         Returns:
             annotated_frame: BGR frame with bounding boxes drawn.
-            frame_counts:    Dict mapping class name → detection count for this frame.
         """
-        frame_counts: Dict[str, int] = defaultdict(int)
+        self._assert_loaded()
+
+        if frame_idx % 25 == 0 or frame_idx == 0:
+            logger.info("%s: Processing Frame %d", self.name, frame_idx)
+
+        conf_thresh: float = float(kwargs.get("conf", settings.yolo_confidence_threshold))
+        iou_thresh: float = float(kwargs.get("iou", settings.yolo_iou_threshold))
 
         with torch.no_grad():
             results = self._model(
-                frame_bgr,
+                frame,
                 conf=conf_thresh,
                 iou=iou_thresh,
                 verbose=False,
@@ -241,7 +159,7 @@ class ObjectDetectionModel(BaseModel):
             )
 
         # Work on a copy so we don't mutate the original
-        annotated = frame_bgr.copy()
+        annotated = frame.copy()
 
         for result in results:
             boxes = result.boxes
@@ -290,6 +208,26 @@ class ObjectDetectionModel(BaseModel):
                     cv2.LINE_AA,
                 )
 
-                frame_counts[cls_name] += 1
+                # Accumulate for global summary
+                self._last_detection_summary[cls_name] = self._last_detection_summary.get(cls_name, 0) + 1
 
-        return annotated, dict(frame_counts)
+        return annotated
+
+    # ── cleanup ───────────────────────────────────────────────────────────────
+
+    def cleanup(self) -> None:
+        """Release GPU memory and reset state."""
+        if self._model is not None:
+            del self._model
+            self._model = None
+        self._last_detection_summary = {}
+        if self._device == "cuda":
+            try:
+                torch.cuda.empty_cache()
+                logger.debug("%s: CUDA cache cleared.", self.name)
+            except Exception:  # noqa: BLE001
+                pass
+        self._loaded = False
+        logger.info("%s: Model Closed and resources released.", self.name)
+
+

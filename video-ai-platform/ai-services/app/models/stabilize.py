@@ -104,6 +104,7 @@ class StabilizationModel(BaseModel):
         self._flow_w: int             = settings.raft_flow_width          # 960
         self._flow_h: int             = settings.raft_flow_height         # 540
         self._iters: int              = settings.raft_iters               # 20
+        self._corrections: List[np.ndarray] = []
 
     # ═══════════════════════════════════════════════════════════════════════════
     # BaseModel interface
@@ -200,64 +201,68 @@ class StabilizationModel(BaseModel):
             self.name, elapsed, self._device.upper(),
         )
 
-    def process(
-        self,
-        frames: List[np.ndarray],
-        fps: float,
-        **kwargs: object,
-    ) -> List[np.ndarray]:
+    def compute_corrections(self, reader) -> None:
         """
-        Stabilize a list of BGR frames.
-
-        RAFT stabilization is a *global* operation — the full frame sequence
-        must be available before any output can be produced because trajectory
-        smoothing works over the entire video. All frames are therefore held
-        in memory throughout this call.
-
-        Args:
-            frames: All video frames in BGR uint8 format (H × W × 3).
-            fps:    Source video frame rate (unused by the algorithm; kept for
-                    interface compatibility).
-
-        Returns:
-            Stabilized and cropped frames.  Output resolution is smaller than
-            input by (2 × CROP_RATIO) in each dimension.
+        Pass 1: Compute optical flow and global trajectory corrections.
+        Reads the entire video stream frame-by-frame, ensuring O(1) RAM usage.
         """
         self._assert_loaded()
 
-        n = len(frames)
-        if n < 2:
-            logger.warning(
-                "%s: need ≥2 frames for stabilization (got %d) — returning unchanged.",
-                self.name, n,
-            )
-            return frames
-
-        logger.info("%s: starting stabilization of %d frames.", self.name, n)
+        logger.info("%s: Starting Pass 1 (Optical Flow & Trajectory)", self.name)
         t_start = time.perf_counter()
 
-        # ── Pass 2: optical flow estimation ───────────────────────────────────
-        logger.info("[flow] Estimating optical flow…")
-        transforms = self._estimate_all_transforms(frames)
-        logger.info("[flow] Done — %d transforms computed.", len(transforms))
+        # Restart reader to frame 0
+        reader.seek(0)
+        
+        transforms: List[np.ndarray] = []
+        prev_frame: Optional[np.ndarray] = None
+        
+        frame_count = 0
+        for _, frame in reader.frames():
+            if prev_frame is not None:
+                flow = self._estimate_flow(prev_frame, frame)
+                transforms.append(self._flow_to_transform(flow))
+            prev_frame = frame
+            frame_count += 1
+            
+            if frame_count % 50 == 0:
+                logger.info("[flow] %d frames analyzed", frame_count)
 
-        # ── Pass 3 + 4 + 5: trajectory build, smooth, correct ─────────────────
-        logger.info("[trajectory] Smoothing…")
-        cumulative  = self._get_cumulative(transforms)
-        smoothed    = self._smooth_trajectory(cumulative)
-        corrections = self._get_corrections(cumulative, smoothed)
+        if frame_count < 2:
+            logger.warning("%s: Need ≥2 frames for stabilization. Disabling.", self.name)
+            self._corrections = []
+            return
 
-        # ── Pass 6: warp + crop ───────────────────────────────────────────────
-        logger.info("[warp] Applying corrections and cropping…")
-        stabilized = self._apply_corrections(frames, corrections)
+        logger.info("[trajectory] Smoothing %d transforms...", len(transforms))
+        cumulative = self._get_cumulative(transforms)
+        smoothed = self._smooth_trajectory(cumulative)
+        self._corrections = self._get_corrections(cumulative, smoothed)
 
         elapsed = time.perf_counter() - t_start
-        h_out, w_out = stabilized[0].shape[:2]
-        logger.info(
-            "%s: complete — %d frames → %dx%d in %.2fs.",
-            self.name, len(stabilized), w_out, h_out, elapsed,
-        )
-        return stabilized
+        logger.info("%s: Pass 1 complete in %.2fs.", self.name, elapsed)
+
+    def process_frame(
+        self,
+        frame: np.ndarray,
+        frame_idx: int,
+        **kwargs: object,
+    ) -> np.ndarray:
+        """
+        Pass 2: Apply the pre-computed correction to the current frame.
+        """
+        self._assert_loaded()
+
+        if not hasattr(self, "_corrections") or not self._corrections:
+            return frame
+
+        # Use the last available correction if frame_idx exceeds pre-computed length
+        # (e.g. if the video has 10 frames, there are 10 corrections)
+        idx = min(frame_idx, len(self._corrections) - 1)
+        M = self._corrections[idx]
+
+        h_orig, w_orig = frame.shape[:2]
+        warped = self._warp_frame(frame, M, (w_orig, h_orig))
+        return self._crop_frame(warped)
 
     def cleanup(self) -> None:
         """Release GPU memory and reset state."""
@@ -265,6 +270,7 @@ class StabilizationModel(BaseModel):
             del self._raft
             self._raft = None
         self._InputPadder = None
+        self._corrections = []
         if self._device == "cuda":
             try:
                 torch.cuda.empty_cache()

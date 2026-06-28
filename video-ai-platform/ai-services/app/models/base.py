@@ -2,9 +2,9 @@
 Abstract base class that every AI model module must implement.
 
 The pipeline manager calls exactly three methods on every model:
-    1. load_model()   — load weights into memory (called at startup)
-    2. process()      — run inference on frames
-    3. cleanup()      — release GPU / file handles
+    1. load_model()      — load weights into memory (called at startup)
+    2. process_frame()   — run inference on a single frame
+    3. cleanup()         — release GPU / file handles
 
 Enforcing this interface makes the pipeline completely model-agnostic.
 """
@@ -50,17 +50,17 @@ class BaseModel(ABC):
         """
 
     @abstractmethod
-    def process(self, frames: List[np.ndarray], fps: float, **kwargs: object) -> List[np.ndarray]:
+    def process_frame(self, frame: np.ndarray, frame_idx: int, **kwargs: object) -> np.ndarray:
         """
-        Run inference on a list of BGR frames.
+        Run inference on a single BGR frame.
 
         Args:
-            frames: List of H×W×3 uint8 numpy arrays in BGR colour space.
-            fps:    Source video frame rate (may be used by temporal models).
-            **kwargs: Any model-specific keyword arguments.
+            frame:     H×W×3 uint8 numpy array in BGR colour space.
+            frame_idx: The 0-based index of the current frame in the video stream.
+            **kwargs:  Any model-specific keyword arguments.
 
         Returns:
-            Processed frames as a list of H×W×3 uint8 numpy arrays in BGR.
+            Processed frame as an H×W×3 uint8 numpy array in BGR.
 
         Raises:
             RuntimeError: if load_model() has not been called yet.

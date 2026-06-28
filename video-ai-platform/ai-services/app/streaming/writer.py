@@ -38,6 +38,7 @@ class VideoWriter:
         fps: float,
         resolution: Tuple[int, int],
         codec: str = "mp4v",
+        original_video_path: Optional[str] = None,
     ) -> None:
         """
         Args:
@@ -45,12 +46,14 @@ class VideoWriter:
             fps:          Frames per second of the output video.
             resolution:   (width, height) tuple.
             codec:        FourCC codec string. Defaults to 'mp4v'.
+            original_video_path: Path to the original video to extract audio from.
         """
         self._final_output_path = Path(output_path)
         self._output_path = self._final_output_path.with_name(f".tmp_{self._final_output_path.name}")
         self._fps = fps
         self._resolution = resolution  # (width, height)
         self._codec = codec
+        self._original_video_path = original_video_path
         self._writer: Optional[cv2.VideoWriter] = None
         self._frames_written: int = 0
 
@@ -134,12 +137,24 @@ class VideoWriter:
             logger.info("Encoding final video with FFmpeg for browser compatibility...")
             cmd = [
                 "ffmpeg", "-y",
-                "-i", str(self._output_path),
+                "-i", str(self._output_path)
+            ]
+            
+            # Map original audio if available
+            if self._original_video_path:
+                cmd.extend(["-i", str(self._original_video_path)])
+                cmd.extend(["-map", "0:v:0", "-map", "1:a:0?"])
+            
+            cmd.extend([
                 "-c:v", "libx264",
+                "-preset", "medium",
+                "-crf", "18",
                 "-pix_fmt", "yuv420p",
                 "-movflags", "+faststart",
+                "-c:a", "aac",
+                "-b:a", "128k",
                 str(self._final_output_path)
-            ]
+            ])
             try:
                 subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 logger.info("FFmpeg encoding completed successfully: %s", self._final_output_path)

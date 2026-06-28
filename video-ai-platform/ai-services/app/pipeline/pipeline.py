@@ -125,56 +125,63 @@ class PipelineManager:
             # ── Build pipeline ────────────────────────────────────────────────
             active_models = self._build_pipeline(request, log)
 
-            # ── Read frames ───────────────────────────────────────────────────
-            log(f"Reading {metadata.frame_count} frames from source…")
-            log_memory_usage("before_read")
+            # ── Execute Pass 1: Stabilization (if enabled) ────────────────────
+            # Stabilization needs to read all frames to compute trajectories.
+            stabilizer = self._models.get("stabilization")
+            is_stabilizing = stabilizer is not None and any(name == "stabilization" for name, _ in active_models)
 
             with VideoReader(request.video_path, buffer_size=settings.frame_buffer_size) as reader:
-                frames: List[np.ndarray] = reader.read_all_frames()
+                current_fps = reader.fps
+                out_h, out_w = reader.height, reader.width
 
-            if not frames:
-                raise RuntimeError("Video contains no readable frames.")
+                if is_stabilizing:
+                    log(f"Stage: {stabilizer.name} — starting Pass 1 (Optical Flow)…")
+                    stage_start = time.perf_counter()
+                    stabilizer.compute_corrections(reader)
+                    stage_elapsed = time.perf_counter() - stage_start
+                    log(f"Stage {stabilizer.name} Pass 1 complete | {format_duration(stage_elapsed)}")
+                    log_memory_usage("after_stabilization_pass1")
+                    
+                    # Update output dimensions if stabilization is cropping
+                    # Crop ratio is stored in the model, but we can compute it from the first frame in pass 2
+                    # For now, we'll wait until pass 2 to get the exact cropped shape.
 
-            log(f"Frame count: {len(frames)}")
-            log_memory_usage("after_read")
+                # ── Execute Pass 2: Streaming Pipeline ───────────────────────────
+                log("Starting Pass 2: Streaming Frame Processing…")
+                
+                # Output path determination
+                output_path = build_output_path(request.video_path, settings.output_dir)
+                log(f"Writing output video: {output_path}")
 
-            # Track the output resolution (may change if stabilization crops)
-            current_fps = metadata.fps
+                # We need to peek at the first frame to determine final cropped resolution if stabilization is active
+                reader.seek(0)
+                ret_idx, first_frame = next(reader.frames())
+                
+                # Dry run the first frame through the pipeline to determine final resolution
+                dry_frame = first_frame.copy()
+                for feature_name, model in active_models:
+                    dry_frame = model.process_frame(dry_frame, 0)
+                
+                out_h, out_w = dry_frame.shape[:2]
 
-            # ── Execute models ────────────────────────────────────────────────
-            for feature_name, model in active_models:
-                log(f"Stage: {model.name} — processing {len(frames)} frames…")
-                stage_start = time.perf_counter()
+                # Reset reader again
+                reader.seek(0)
 
-                frames = model.process(frames, current_fps)
+                with VideoWriter(
+                    output_path, 
+                    fps=current_fps, 
+                    resolution=(out_w, out_h), 
+                    original_video_path=request.video_path
+                ) as writer:
+                    for idx, frame in reader.frames():
+                        for feature_name, model in active_models:
+                            frame = model.process_frame(frame, idx)
+                        writer.write(frame)
 
-                stage_elapsed = time.perf_counter() - stage_start
-                log(
-                    f"Stage {model.name} complete — "
-                    f"{len(frames)} frames out | {format_duration(stage_elapsed)}"
-                )
-                log_memory_usage(f"after_{feature_name}")
-
-            # ── Collect detection summary (if object detection ran) ────────────
-            detection_summary: Optional[Dict[str, int]] = None
-            obj_model = self._models.get("object_detection")
-            if obj_model is not None and obj_model.is_loaded:
-                raw_summary = getattr(obj_model, "_last_detection_summary", None)
-                if raw_summary:
-                    detection_summary = dict(raw_summary)
-
-            # ── Determine output dimensions ───────────────────────────────────
-            if frames:
-                out_h, out_w = frames[0].shape[:2]
-            else:
-                out_h, out_w = metadata.height, metadata.width
-
-            # ── Write output ──────────────────────────────────────────────────
-            output_path = build_output_path(request.video_path, settings.output_dir)
-            log(f"Writing output video: {output_path}")
-
-            with VideoWriter(output_path, fps=current_fps, resolution=(out_w, out_h)) as writer:
-                writer.write_batch(frames)
+                # ── Validate Final Output ─────────────────────────────────────────
+                from app.utils.video_utils import validate_output_video
+                log("Validating browser compatibility of output MP4...")
+                validate_output_video(output_path)
 
             elapsed = time.perf_counter() - start_time
             exec_time_str = format_duration(elapsed)
