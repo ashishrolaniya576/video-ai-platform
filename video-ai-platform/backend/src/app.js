@@ -32,7 +32,7 @@ app.use('/api', streamRoutes);
 app.use('/api', uploadRoutes);
 
 // Serve the ai-services output directory statically so the frontend can load the video
-const mediaPath = path.join(__dirname, '../../../ai-services');
+const mediaPath = path.join(__dirname, '../../ai-services');
 app.use('/api/media', express.static(mediaPath));
 
 app.use((req, res) => {
