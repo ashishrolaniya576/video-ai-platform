@@ -234,27 +234,19 @@ class HeavyRainRemovalModel(BaseModel):
             img_resized = frame_rgb
 
         # Transform to tensor (manual for speed to avoid transforms.ToTensor overhead)
-        img_float = (img_resized.astype(np.float32) / 255.0 - 0.5) / 0.5
-        input_tensor = torch.from_numpy(img_float).permute(2, 0, 1).unsqueeze(0).to(self._device, non_blocking=True)
+        input_tensor = torch.from_numpy(img_resized).to(self._device, non_blocking=True)
+        # Preprocessing: convert to float, normalize to [-1, 1] using in-place operations
+        input_tensor = input_tensor.permute(2, 0, 1).unsqueeze(0).float().mul_(2.0 / 255.0).sub_(1.0)
 
         # Inference
         with torch.inference_mode(), torch.autocast(device_type=self._device, enabled=self._device=="cuda"):
-            st_out, trans_out, atm_out, clean_out = self._network(input_tensor) # type: ignore
+            _, _, _, clean_out = self._network(input_tensor) # type: ignore
             
-            # The notebook's test.py does:
-            # clean_out = (image_in_var - st_out - (1 - trans_out) * atm_out) / (trans_out + 0.0001)
-            # However, looking at test.py predict() method, it just uses clean_out directly, or recomputes it.
-            # Wait, in predict(), it does recompute:
-            # clean_out = (input_var - st_out - (1 - trans_out) * atm_out) / (trans_out + 0.0001)
-            output_tensor = (input_tensor - st_out - (1 - trans_out) * atm_out) / (trans_out + 0.0001)
-
-        # Postprocessing: Un-normalize and clamp
-        output_tensor = output_tensor + 0.5
-        output_tensor = output_tensor.clamp(0.0, 1.0)
+            # Postprocessing: Un-normalize and clamp in-place, then convert to uint8 directly on GPU
+            clean_out.add_(0.5).clamp_(0.0, 1.0).mul_(255.0)
         
         # Convert to numpy array [H, W, C]
-        out_rgb = output_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()
-        out_rgb = (out_rgb * 255.0).astype(np.uint8)
+        out_rgb = clean_out.squeeze(0).permute(1, 2, 0).to(torch.uint8).cpu().numpy()
 
         # Resize back to original dimensions if we changed them
         if new_h != orig_h or new_w != orig_w:

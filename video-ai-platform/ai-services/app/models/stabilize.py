@@ -217,14 +217,38 @@ class StabilizationModel(BaseModel):
         reader.seek(0)
         
         transforms: List[np.ndarray] = []
-        prev_frame: Optional[np.ndarray] = None
         
         frame_count = 0
+        cached_t1 = None
+        cached_fmap1 = None
+        cached_cnet1 = None
+        padder = None
+        
         for _, frame in reader.frames():
-            if prev_frame is not None:
-                flow = self._estimate_flow(prev_frame, frame)
-                transforms.append(self._flow_to_transform(flow))
-            prev_frame = frame
+            h_orig, w_orig = frame.shape[:2]
+            # Resize and convert current frame
+            s = cv2.resize(frame, (self._flow_w, self._flow_h), interpolation=cv2.INTER_AREA)
+            t = self._to_tensor(s)
+            
+            if padder is None:
+                padder = self._InputPadder(t.shape)
+            
+            t2 = padder.pad(t)[0]
+
+            if cached_t1 is None:
+                # First frame, just cache it
+                cached_t1 = t2
+                frame_count += 1
+                continue
+
+            # Process flow
+            flow, cached_fmap1, cached_cnet1 = self._estimate_flow(
+                cached_t1, t2, padder, h_orig, w_orig, cached_fmap1, cached_cnet1
+            )
+            transforms.append(self._flow_to_transform(flow))
+            
+            # Shift caches for next iteration
+            cached_t1 = t2
             frame_count += 1
             
             if frame_count % 50 == 0:
@@ -304,41 +328,16 @@ class StabilizationModel(BaseModel):
             .to(self._device, non_blocking=True)
         )
 
-    def _estimate_flow(self, f1: np.ndarray, f2: np.ndarray) -> np.ndarray:
+    def _estimate_flow(self, t1: torch.Tensor, t2: torch.Tensor, padder, h_orig: int, w_orig: int, cached_fmap1, cached_cnet1) -> tuple:
         """
-        Estimate RAFT optical flow from frame f1 to frame f2.
-
-        Matches notebook's estimate_flow() exactly:
-          1. Resize both frames to FLOW_W × FLOW_H (INTER_AREA downscale)
-          2. Convert to tensors and pad to RAFT-compatible dimensions
-          3. Run RAFT for self._iters iterations in test_mode
-          4. Unpad, permute to HWC, move to CPU numpy
-          5. Resize flow back to original resolution (INTER_LINEAR)
-          6. Rescale x/y components by (w/FLOW_W, h/FLOW_H)
-
-        Args:
-            f1: Previous frame (H × W × 3 BGR uint8).
-            f2: Current  frame (H × W × 3 BGR uint8).
-
-        Returns:
-            Dense flow field as float32 numpy array (H × W × 2) in original
-            frame coordinates. flow[y, x, 0] = dx, flow[y, x, 1] = dy.
+        Estimate RAFT optical flow using cached tensors and feature maps.
         """
-        h_orig, w_orig = f1.shape[:2]
-
-        # Resize to inference resolution
-        s1 = cv2.resize(f1, (self._flow_w, self._flow_h), interpolation=cv2.INTER_AREA)
-        s2 = cv2.resize(f2, (self._flow_w, self._flow_h), interpolation=cv2.INTER_AREA)
-
         with torch.inference_mode(), torch.autocast(device_type=self._device, enabled=self._device=="cuda"):
-            t1, t2 = self._to_tensor(s1), self._to_tensor(s2)
-
-            # InputPadder ensures dimensions are multiples of 8 (RAFT requirement)
-            padder = self._InputPadder(t1.shape)
-            t1, t2 = padder.pad(t1, t2)
-
-            # RAFT returns (flow_low, flow_up); we use flow_up (full resolution)
-            _, flow_up = self._raft(t1, t2, iters=self._iters, test_mode=True)
+            # RAFT returns (flow_low, flow_up, fmap2, cnet2); we use flow_up (full resolution)
+            _, flow_up, fmap2, cnet2 = self._raft(
+                t1, t2, iters=self._iters, test_mode=True, 
+                cached_fmap1=cached_fmap1, cached_cnet1=cached_cnet1
+            )
 
             # Unpad, remove batch dim, CHW → HWC, move to CPU
             flow = padder.unpad(flow_up)[0].permute(1, 2, 0).cpu().numpy()
@@ -350,7 +349,7 @@ class StabilizationModel(BaseModel):
         flow[..., 0] *= w_orig / self._flow_w   # dx scale
         flow[..., 1] *= h_orig / self._flow_h   # dy scale
 
-        return flow
+        return flow, fmap2, cnet2
 
     # ═══════════════════════════════════════════════════════════════════════════
     # Internal — transform estimation
