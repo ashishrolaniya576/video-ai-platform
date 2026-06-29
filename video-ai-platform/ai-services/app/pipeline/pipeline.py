@@ -110,6 +110,7 @@ class PipelineManager:
         start_time = time.perf_counter()
         logs: List[str] = []
         temp_paths: List[Path] = []
+        detection_summary: Optional[Dict[str, int]] = None
 
         def log(msg: str, level: str = "info") -> None:
             getattr(logger, level)(msg)
@@ -159,7 +160,11 @@ class PipelineManager:
                 # We need to peek at the first frame to determine final cropped resolution if stabilization is active
                 reader.seek(0)
                 frame_generator = reader.frames()
-                ret_idx, first_frame = next(frame_generator)
+                
+                try:
+                    ret_idx, first_frame = next(frame_generator)
+                except StopIteration as e:
+                    raise ValueError("Video source contains no decodable frames or is corrupted.") from e
                 
                 # Process the first frame through the pipeline to determine final resolution
                 dry_frame = first_frame.copy()
@@ -197,6 +202,15 @@ class PipelineManager:
                         for feature_name, model in active_models:
                             frame = model.process_frame(frame, idx)
                         writer.write(frame)
+
+                # ── Extract Optional Results ──────────────────────────────────────
+                try:
+                    if request.distance_estimation:
+                        dist_model = self._models.get("distance_estimation")
+                        if dist_model and hasattr(dist_model, "_last_detection_summary"):
+                            detection_summary = dist_model._last_detection_summary.copy()
+                except Exception as e:
+                    log(f"Warning: Failed to extract detection summary: {e}", level="warning")
 
                 # ── Validate Final Output ─────────────────────────────────────────
                 from app.utils.video_utils import validate_output_video
