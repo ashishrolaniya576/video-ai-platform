@@ -194,11 +194,8 @@ class HeavyRainRemovalModel(BaseModel):
 
         network = network.to(torch_device).eval()
 
-        # Define preprocessing transform from the notebook's test.py
-        self._transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
-        ])
+        # We use manual numpy conversion in process_frame instead of this transform for speed.
+        self._transform = None
 
         self._network = network
         self._loaded = True
@@ -236,11 +233,12 @@ class HeavyRainRemovalModel(BaseModel):
         else:
             img_resized = frame_rgb
 
-        # Transform to tensor
-        input_tensor = self._transform(img_resized).unsqueeze(0).to(self._device) # type: ignore
+        # Transform to tensor (manual for speed to avoid transforms.ToTensor overhead)
+        img_float = (img_resized.astype(np.float32) / 255.0 - 0.5) / 0.5
+        input_tensor = torch.from_numpy(img_float).permute(2, 0, 1).unsqueeze(0).to(self._device, non_blocking=True)
 
         # Inference
-        with torch.no_grad():
+        with torch.inference_mode(), torch.autocast(device_type=self._device, enabled=self._device=="cuda"):
             st_out, trans_out, atm_out, clean_out = self._network(input_tensor) # type: ignore
             
             # The notebook's test.py does:

@@ -42,6 +42,7 @@ class Settings(BaseSettings):
 
     # ── Streaming ─────────────────────────────────────────────
     frame_buffer_size: int = Field(default=32, alias="FRAME_BUFFER_SIZE")
+    max_resolution: int = Field(default=1920, alias="MAX_RESOLUTION")
 
     # ── RAFT Stabilizer ───────────────────────────────────────
     raft_model_path: Path = Field(

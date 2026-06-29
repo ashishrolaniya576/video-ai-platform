@@ -54,24 +54,38 @@ else
 fi
 
 # 2. Backend Health Check
-info "Verifying Backend API..."
-if curl -s http://localhost:5000/api/health | grep -q "running"; then
+info "Verifying Backend API (waiting up to 15s)..."
+BACKEND_OK=0
+for i in {1..15}; do
+    if curl -s http://localhost:5000/api/health | grep -q "running"; then
+        BACKEND_OK=1
+        break
+    fi
+    sleep 1
+done
+
+if [ "$BACKEND_OK" -eq 1 ]; then
     log_pass "Backend API is healthy on port 5000."
 else
     log_fail "Backend API failed health check on port 5000."
 fi
 
 # 3. AI Service Health & Model Loading Check
-info "Verifying AI Service & Model Loading..."
-AI_HEALTH=$(curl -s http://localhost:8000/health || echo "FAILED")
-if [[ "$AI_HEALTH" == "FAILED" ]]; then
-    log_fail "AI Service is unreachable on port 8000."
-else
-    if echo "$AI_HEALTH" | grep -q '"status":"running"'; then
-        log_pass "AI Service API is healthy."
-    else
-        log_fail "AI Service API reported unhealthy status."
+info "Verifying AI Service & Model Loading (waiting up to 15s)..."
+AI_OK=0
+for i in {1..15}; do
+    AI_HEALTH=$(curl -s http://localhost:8000/health || echo "FAILED")
+    if [[ "$AI_HEALTH" != "FAILED" ]] && echo "$AI_HEALTH" | grep -q '"status":"running"'; then
+        AI_OK=1
+        break
     fi
+    sleep 1
+done
+
+if [[ "$AI_OK" -eq 0 ]]; then
+    log_fail "AI Service is unreachable or unhealthy on port 8000."
+else
+    log_pass "AI Service API is healthy."
 
     # Check each model in the health JSON
     for model in "stabilization" "heavy_rain_removal" "video_visibility" "distance_estimation"; do

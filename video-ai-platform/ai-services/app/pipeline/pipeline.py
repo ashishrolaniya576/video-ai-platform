@@ -24,6 +24,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import numpy as np
+import torch
+if torch.cuda.is_available():
+    torch.backends.cudnn.benchmark = True
 
 from app.config.settings import settings
 from app.models.base import BaseModel
@@ -155,17 +158,24 @@ class PipelineManager:
 
                 # We need to peek at the first frame to determine final cropped resolution if stabilization is active
                 reader.seek(0)
-                ret_idx, first_frame = next(reader.frames())
+                frame_generator = reader.frames()
+                ret_idx, first_frame = next(frame_generator)
                 
-                # Dry run the first frame through the pipeline to determine final resolution
+                # Process the first frame through the pipeline to determine final resolution
                 dry_frame = first_frame.copy()
+                
+                # Optional high-resolution downscaling
+                if max(dry_frame.shape[1], dry_frame.shape[0]) > settings.max_resolution:
+                    scale = settings.max_resolution / max(dry_frame.shape[1], dry_frame.shape[0])
+                    new_w = int(dry_frame.shape[1] * scale)
+                    new_h = int(dry_frame.shape[0] * scale)
+                    dry_frame = cv2.resize(dry_frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                    log(f"Downscaling input frames to {new_w}x{new_h} to preserve performance.")
+
                 for feature_name, model in active_models:
                     dry_frame = model.process_frame(dry_frame, 0)
                 
                 out_h, out_w = dry_frame.shape[:2]
-
-                # Reset reader again
-                reader.seek(0)
 
                 with VideoWriter(
                     output_path, 
@@ -173,7 +183,17 @@ class PipelineManager:
                     resolution=(out_w, out_h), 
                     original_video_path=request.video_path
                 ) as writer:
-                    for idx, frame in reader.frames():
+                    # Write the already processed first frame
+                    writer.write(dry_frame)
+
+                    # Continue streaming the remaining frames from the generator
+                    for idx, frame in frame_generator:
+                        if max(frame.shape[1], frame.shape[0]) > settings.max_resolution:
+                            scale = settings.max_resolution / max(frame.shape[1], frame.shape[0])
+                            new_w = int(frame.shape[1] * scale)
+                            new_h = int(frame.shape[0] * scale)
+                            frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
                         for feature_name, model in active_models:
                             frame = model.process_frame(frame, idx)
                         writer.write(frame)

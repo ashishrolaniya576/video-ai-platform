@@ -1,16 +1,20 @@
 """
 VideoWriter — writes processed frames to an MP4 output file.
 
-Preserves FPS and resolution. Releases resources correctly.
+Streams raw frames directly to an FFmpeg subprocess via stdin.
+Uses a background thread and a Queue to decouple GPU inference from disk I/O.
+This strictly avoids double-encoding and eliminates pipe backpressure stalls.
 """
 
 from __future__ import annotations
 
+import subprocess
+import shutil
+import threading
+import queue
 from pathlib import Path
 from typing import Optional, Tuple
 
-import subprocess
-import shutil
 import cv2
 import numpy as np
 
@@ -18,13 +22,10 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Preferred codec order — tried in sequence until one works
-_CODEC_CANDIDATES = ["mp4v", "avc1", "XVID"]
-
 
 class VideoWriter:
     """
-    Context-manager wrapper around cv2.VideoWriter.
+    Context-manager wrapper around FFmpeg raw streaming.
 
     Usage:
         with VideoWriter("output.mp4", fps=30.0, resolution=(1280, 720)) as writer:
@@ -37,25 +38,33 @@ class VideoWriter:
         output_path: Path,
         fps: float,
         resolution: Tuple[int, int],
-        codec: str = "mp4v",
+        codec: str = "libx264",
         original_video_path: Optional[str] = None,
+        buffer_size: int = 64,
     ) -> None:
         """
         Args:
             output_path:  Destination MP4 file. Parent directories are created.
             fps:          Frames per second of the output video.
             resolution:   (width, height) tuple.
-            codec:        FourCC codec string. Defaults to 'mp4v'.
+            codec:        FFmpeg output codec string. Defaults to 'libx264'.
             original_video_path: Path to the original video to extract audio from.
+            buffer_size:  Size of the async frame writing queue.
         """
         self._final_output_path = Path(output_path)
-        self._output_path = self._final_output_path.with_name(f".tmp_{self._final_output_path.name}")
         self._fps = fps
         self._resolution = resolution  # (width, height)
         self._codec = codec
         self._original_video_path = original_video_path
-        self._writer: Optional[cv2.VideoWriter] = None
+        
+        self._proc: Optional[subprocess.Popen] = None
         self._frames_written: int = 0
+        
+        # Async writing components
+        self._queue: queue.Queue = queue.Queue(maxsize=buffer_size)
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._error: Optional[Exception] = None
 
     # ── Context manager ───────────────────────────────────────────────────────
 
@@ -63,137 +72,130 @@ class VideoWriter:
         self.open()
         return self
 
-    def __exit__(self, *_: object) -> None:
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        # If an exception occurred in the pipeline, we still release safely
         self.release()
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def open(self) -> None:
-        """Open the output file for writing."""
-        self._output_path.parent.mkdir(parents=True, exist_ok=True)
+        """Open the output file for writing via FFmpeg and start writer thread."""
+        self._final_output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        if not shutil.which("ffmpeg"):
+            raise RuntimeError("FFmpeg not found in PATH! Required for fast video streaming.")
 
-        writer = self._try_open_with_codec(self._codec)
-        if writer is None:
-            # Try fallback codecs
-            for fallback in _CODEC_CANDIDATES:
-                if fallback == self._codec:
-                    continue
-                writer = self._try_open_with_codec(fallback)
-                if writer is not None:
-                    logger.warning(
-                        "Primary codec '%s' failed; using fallback '%s'",
-                        self._codec,
-                        fallback,
-                    )
-                    self._codec = fallback
-                    break
+        width, height = self._resolution
 
-        if writer is None:
-            raise RuntimeError(
-                f"Could not open VideoWriter for {self._output_path}. "
-                "No working codec found."
-            )
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "rawvideo",
+            "-vcodec", "rawvideo",
+            "-s", f"{width}x{height}",
+            "-pix_fmt", "bgr24",
+            "-r", str(self._fps),
+            "-i", "-"  # Read from stdin
+        ]
+        
+        if self._original_video_path:
+            cmd.extend(["-i", str(self._original_video_path)])
+            cmd.extend(["-map", "0:v:0", "-map", "1:a:0?", "-c:a", "aac", "-b:a", "128k", "-shortest"])
 
-        self._writer = writer
+        cmd.extend([
+            "-c:v", self._codec,
+            "-preset", "veryfast",  # Optimized for speed
+            "-crf", "20",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            str(self._final_output_path)
+        ])
+        
         logger.info(
             "VideoWriter opened: %s | %.2f fps | %dx%d | codec=%s",
-            self._output_path,
-            self._fps,
-            self._resolution[0],
-            self._resolution[1],
-            self._codec,
+            self._final_output_path, self._fps, width, height, self._codec
         )
+        
+        self._proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        
+        # Start background consumer thread
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._write_loop, daemon=True)
+        self._thread.start()
 
-    def _try_open_with_codec(self, codec: str) -> Optional[cv2.VideoWriter]:
-        fourcc = cv2.VideoWriter_fourcc(*codec)
-        writer = cv2.VideoWriter(
-            str(self._output_path),
-            fourcc,
-            self._fps,
-            self._resolution,  # (width, height)
-        )
-        if writer.isOpened():
-            return writer
-        writer.release()
-        return None
+    def _write_loop(self) -> None:
+        """Background thread that consumes frames and pipes to FFmpeg."""
+        if self._proc is None or self._proc.stdin is None:
+            return
+            
+        try:
+            while not self._stop_event.is_set() or not self._queue.empty():
+                try:
+                    frame = self._queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                    
+                if frame is None:
+                    # None is a sentinel indicating end of stream
+                    break
+                    
+                self._proc.stdin.write(frame)
+                self._frames_written += 1
+                self._queue.task_done()
+                
+        except Exception as e:
+            self._error = e
+            logger.error("FFmpeg writer thread failed: %s", e)
 
     def release(self) -> None:
-        """Flush and release the underlying VideoWriter and encode with FFmpeg."""
-        if self._writer is not None:
-            self._writer.release()
-            self._writer = None
+        """Flush the queue, stop the thread, and release the FFmpeg process."""
+        self._stop_event.set()
+        
+        if self._thread is not None:
+            # Inject sentinel to unblock the get() immediately if queue is empty
+            try:
+                self._queue.put(None, timeout=1.0)
+            except queue.Full:
+                pass
+            
+            self._thread.join(timeout=5.0)
+            self._thread = None
+            
+        if self._proc is not None:
+            if self._proc.stdin is not None:
+                self._proc.stdin.close()
+            self._proc.wait()
+            self._proc = None
             logger.info(
-                "OpenCV VideoWriter released: %s | %d frames written",
-                self._output_path,
+                "FFmpeg VideoWriter released: %s | %d frames written",
+                self._final_output_path,
                 self._frames_written,
             )
-            
-            if not shutil.which("ffmpeg"):
-                logger.error("FFmpeg not found in PATH! Please install ffmpeg (e.g. sudo apt install ffmpeg).")
-                logger.warning("Falling back to raw OpenCV video. This may not be playable in browsers.")
-                shutil.move(str(self._output_path), str(self._final_output_path))
-                return
-
-            logger.info("Encoding final video with FFmpeg for browser compatibility...")
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", str(self._output_path)
-            ]
-            
-            # Map original audio if available
-            if self._original_video_path:
-                cmd.extend(["-i", str(self._original_video_path)])
-                cmd.extend(["-map", "0:v:0", "-map", "1:a:0?"])
-            
-            cmd.extend([
-                "-c:v", "libx264",
-                "-preset", "medium",
-                "-crf", "18",
-                "-pix_fmt", "yuv420p",
-                "-movflags", "+faststart",
-                "-c:a", "aac",
-                "-b:a", "128k",
-                str(self._final_output_path)
-            ])
-            try:
-                subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                logger.info("FFmpeg encoding completed successfully: %s", self._final_output_path)
-                if self._output_path.exists():
-                    self._output_path.unlink()
-            except subprocess.CalledProcessError as e:
-                logger.error("FFmpeg encoding failed:\n%s", e.stderr.decode("utf-8", errors="ignore"))
-                logger.warning("Falling back to raw OpenCV video.")
-                shutil.move(str(self._output_path), str(self._final_output_path))
 
     # ── Writing ───────────────────────────────────────────────────────────────
 
     def write(self, frame: np.ndarray) -> None:
-        """
-        Write a single BGR frame.
-
-        Args:
-            frame: HxWx3 uint8 numpy array in BGR colour space.
-
-        Raises:
-            RuntimeError: if the writer was not opened.
-        """
-        if self._writer is None:
+        """Enqueue a single BGR frame for async writing."""
+        if self._proc is None or self._thread is None:
             raise RuntimeError("VideoWriter is not open. Call open() first.")
+            
+        if self._error is not None:
+            raise RuntimeError(f"VideoWriter background thread crashed: {self._error}")
 
         # Ensure the frame matches the declared resolution
         h, w = frame.shape[:2]
         if (w, h) != self._resolution:
             frame = cv2.resize(frame, self._resolution, interpolation=cv2.INTER_LINEAR)
 
-        # Ensure uint8 dtype
-        if frame.dtype != np.uint8:
-            frame = np.clip(frame, 0, 255).astype(np.uint8)
-
-        self._writer.write(frame)
-        self._frames_written += 1
+        # Push raw bytes to the queue (blocks if queue is full, effectively backpressuring)
+        self._queue.put(frame.tobytes())
 
     def write_batch(self, frames: list[np.ndarray]) -> None:
-        """Write a list of frames in order."""
+        """Enqueue a list of frames in order."""
         for frame in frames:
             self.write(frame)
 

@@ -105,6 +105,7 @@ class StabilizationModel(BaseModel):
         self._flow_h: int             = settings.raft_flow_height         # 540
         self._iters: int              = settings.raft_iters               # 20
         self._corrections: List[np.ndarray] = []
+        self._grid_cache: dict[tuple[int, int], np.ndarray] = {}
 
     # ═══════════════════════════════════════════════════════════════════════════
     # BaseModel interface
@@ -271,6 +272,7 @@ class StabilizationModel(BaseModel):
             self._raft = None
         self._InputPadder = None
         self._corrections = []
+        self._grid_cache.clear()
         if self._device == "cuda":
             try:
                 torch.cuda.empty_cache()
@@ -298,7 +300,7 @@ class StabilizationModel(BaseModel):
             .permute(2, 0, 1)     # HWC → CHW
             .float()
             .unsqueeze(0)         # → [1, C, H, W]
-            .to(self._device)
+            .to(self._device, non_blocking=True)
         )
 
     def _estimate_flow(self, f1: np.ndarray, f2: np.ndarray) -> np.ndarray:
@@ -327,7 +329,7 @@ class StabilizationModel(BaseModel):
         s1 = cv2.resize(f1, (self._flow_w, self._flow_h), interpolation=cv2.INTER_AREA)
         s2 = cv2.resize(f2, (self._flow_w, self._flow_h), interpolation=cv2.INTER_AREA)
 
-        with torch.no_grad():
+        with torch.inference_mode(), torch.autocast(device_type=self._device, enabled=self._device=="cuda"):
             t1, t2 = self._to_tensor(s1), self._to_tensor(s2)
 
             # InputPadder ensures dimensions are multiples of 8 (RAFT requirement)
@@ -374,16 +376,23 @@ class StabilizationModel(BaseModel):
         """
         h, w = flow.shape[:2]
 
-        # Sparse grid of source points
-        ys, xs = np.mgrid[
-            _GRID_STEP // 2 : h : _GRID_STEP,
-            _GRID_STEP // 2 : w : _GRID_STEP,
-        ]
-        src = np.stack([xs.ravel(), ys.ravel()], axis=1).astype(np.float32)
+        # Retrieve or compute sparse grid of source points
+        cache_key = (h, w)
+        if cache_key not in self._grid_cache:
+            ys, xs = np.mgrid[
+                _GRID_STEP // 2 : h : _GRID_STEP,
+                _GRID_STEP // 2 : w : _GRID_STEP,
+            ]
+            ys_ravel = ys.ravel()
+            xs_ravel = xs.ravel()
+            src_points = np.stack([xs_ravel, ys_ravel], axis=1).astype(np.float32)
+            self._grid_cache[cache_key] = (src_points, ys_ravel, xs_ravel)
+            
+        src, ys_ravel, xs_ravel = self._grid_cache[cache_key]
 
         # Displacement at sampled locations
-        dx = flow[ys.ravel(), xs.ravel(), 0]
-        dy = flow[ys.ravel(), xs.ravel(), 1]
+        dx = flow[ys_ravel, xs_ravel, 0]
+        dy = flow[ys_ravel, xs_ravel, 1]
         dst = src + np.stack([dx, dy], axis=1).astype(np.float32)
 
         M, _ = cv2.estimateAffinePartial2D(

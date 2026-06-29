@@ -1,13 +1,14 @@
 """
 VideoReader — frame-by-frame streaming reader for local files and network streams.
 
-Never loads the entire video into RAM. Supports MP4, AVI, MOV,
-RTSP, RTMP, HTTP Video, and HLS sources.
+Uses a background thread and a Queue to prefetch frames, overlapping I/O with GPU inference.
+Never loads the entire video into RAM.
 """
 
 from __future__ import annotations
 
-import time
+import threading
+import queue
 from pathlib import Path
 from typing import Generator, Optional, Tuple
 
@@ -22,7 +23,7 @@ logger = get_logger(__name__)
 
 class VideoReader:
     """
-    Context-manager wrapper around cv2.VideoCapture.
+    Context-manager wrapper around cv2.VideoCapture with asynchronous prefetching.
 
     Usage:
         with VideoReader("path/to/video.mp4") as reader:
@@ -34,12 +35,16 @@ class VideoReader:
         """
         Args:
             source:      Local file path or streaming URL.
-            buffer_size: Internal OpenCV capture buffer size hint.
+            buffer_size: Maximum frames to prefetch in the queue.
         """
         self._source = source
         self._buffer_size = buffer_size
         self._cap: Optional[cv2.VideoCapture] = None
         self._metadata: Optional[VideoMetadata] = None
+        
+        self._queue: queue.Queue = queue.Queue(maxsize=buffer_size)
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
 
     # ── Context manager ───────────────────────────────────────────────────────
 
@@ -64,6 +69,7 @@ class VideoReader:
         )
 
         self._cap = cv2.VideoCapture(self._source)
+        # We handle our own buffering via threading, but this sets OpenCV's internal hint.
         self._cap.set(cv2.CAP_PROP_BUFFERSIZE, self._buffer_size)
 
         if not self._cap.isOpened():
@@ -76,9 +82,64 @@ class VideoReader:
             self._metadata.fps,
             self._metadata.frame_count,
         )
+        
+        # Start the prefetching thread
+        self._start_thread()
 
+    def _start_thread(self):
+        self._stop_event.clear()
+        
+        # Clear any existing queue elements
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+                
+        self._thread = threading.Thread(target=self._read_loop, daemon=True)
+        self._thread.start()
+
+    def _read_loop(self):
+        """Background thread loop to read frames from cv2 and push to the queue."""
+        if self._cap is None:
+            return
+            
+        while not self._stop_event.is_set():
+            ret, frame = self._cap.read()
+            if not ret:
+                # Push None to signal EOF
+                try:
+                    self._queue.put(None, timeout=1.0)
+                except queue.Full:
+                    pass
+                break
+            
+            try:
+                # Block if the queue is full, effectively backpressuring OpenCV
+                self._queue.put(frame, timeout=1.0)
+            except queue.Full:
+                # If it times out, continue the loop (checking stop_event)
+                if not self._stop_event.is_set():
+                    try:
+                        self._queue.put(frame, timeout=1.0)
+                    except queue.Full:
+                        pass
+                        
     def release(self) -> None:
-        """Release the underlying VideoCapture handle."""
+        """Release the underlying VideoCapture handle and stop the thread."""
+        self._stop_event.set()
+        
+        # Drain the queue to unblock the thread if it's waiting to put
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+                
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+            
         if self._cap is not None:
             self._cap.release()
             self._cap = None
@@ -113,53 +174,38 @@ class VideoReader:
     def frames(self) -> Generator[Tuple[int, np.ndarray], None, None]:
         """
         Yield (frame_index, frame_bgr) tuples one at a time.
-
-        Never accumulates frames in memory — always reads and yields one frame
-        at a time so the caller controls when to move to the next.
+        Pulls from the prefetching queue to overlap I/O with inference.
         """
         if self._cap is None:
             raise RuntimeError("VideoReader is not open. Call open() or use as a context manager.")
 
         index = 0
         while True:
-            ret, frame = self._cap.read()
-            if not ret:
+            # Block until a frame is available or EOF
+            frame = self._queue.get()
+            if frame is None:
                 break
+            
             yield index, frame
             index += 1
 
         logger.info("Frame iteration complete — %d frames read from %s", index, self._source)
 
-    def read_all_frames(self) -> list[np.ndarray]:
-        """
-        Read all frames into a list.
-
-        WARNING: Only use this for short videos or when the stabilizer
-        requires the full sequence up-front (e.g. trajectory smoothing).
-        For long videos prefer the `frames()` generator.
-        """
-        if self._cap is None:
-            raise RuntimeError("VideoReader is not open.")
-
-        logger.warning(
-            "read_all_frames() called — loading entire video into RAM for: %s",
-            self._source,
-        )
-        # Rewind to the beginning
-        self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-
-        all_frames: list[np.ndarray] = []
-        while True:
-            ret, frame = self._cap.read()
-            if not ret:
-                break
-            all_frames.append(frame)
-
-        logger.info("read_all_frames() loaded %d frames", len(all_frames))
-        return all_frames
-
     def seek(self, frame_index: int) -> None:
-        """Seek to a specific frame index."""
+        """Seek to a specific frame index and restart the prefetcher."""
         if self._cap is None:
             raise RuntimeError("VideoReader is not open.")
+            
+        self._stop_event.set()
+        
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+                
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            
         self._cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+        self._start_thread()

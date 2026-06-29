@@ -49,7 +49,7 @@ def read_yaml(yaml_path: str):
 def to_tensor_chw_uint(image_bgr: np.ndarray) -> torch.Tensor:
     """BGR -> RGB -> CHW float32 [0,1]"""
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-    return torch.tensor(np.transpose(image_rgb, (2, 0, 1)), dtype=torch.float32) / 255.0
+    return torch.from_numpy(image_rgb).permute(2, 0, 1).float() / 255.0
 
 
 def scale_to_width_keep_aspect(image_bgr: np.ndarray, width: int) -> np.ndarray:
@@ -146,11 +146,11 @@ class DistanceEstimationModel(BaseModel):
         
         image_tensor = to_tensor_chw_uint(scaled_frame)
         inputs = {
-            "image": image_tensor.to(self._device), 
-            "fov": torch.tensor(float(self.fov), dtype=torch.float32).to(self._device)
+            "image": image_tensor.to(self._device, non_blocking=True), 
+            "fov": torch.tensor(float(self.fov), dtype=torch.float32, device=self._device)
         }
 
-        with torch.no_grad():
+        with torch.inference_mode(), torch.autocast(device_type=self._device, enabled=self._device=="cuda"):
             output = self._model([inputs])[0]
 
         boxes = output["boxes"].cpu()
