@@ -1,0 +1,28 @@
+<annotation>
+	<folder>Images_22_23_24cropped</folder>
+	<filename>RS_PandianTivu_20250924_12H-08M-54S.png</filename>
+	<path>/home/maedelta/Gokul_WS/Images_22_23_24cropped/RS_PandianTivu_20250924_12H-08M-54S.png</path>
+	<source>
+		<database>Unknown</database>
+	</source>
+	<size>
+		<width>672</width>
+		<height>499</height>
+		<depth>3</depth>
+	</size>
+	<segmented>0</segmented>
+	<object>
+		<name>FISHING_BOAT</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>236</xmin>
+			<ymin>229</ymin>
+			<xmax>365</xmax>
+			<ymax>290</ymax>
+		</bndbox>
+		<fov>4.81</fov>
+		<distance>0.0522</distance>
+	</object>
+</annotation>

@@ -1,0 +1,28 @@
+<annotation>
+	<folder>Images_22_23_24cropped</folder>
+	<filename>RS_Chennai_20250924_12H-17M-27S.png</filename>
+	<path>/home/maedelta/Gokul_WS/Images_22_23_24cropped/RS_Chennai_20250924_12H-17M-27S.png</path>
+	<source>
+		<database>Unknown</database>
+	</source>
+	<size>
+		<width>665</width>
+		<height>500</height>
+		<depth>3</depth>
+	</size>
+	<segmented>0</segmented>
+	<object>
+		<name>PATROL_VESSEL</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>277</xmin>
+			<ymin>227</ymin>
+			<xmax>433</xmax>
+			<ymax>314</ymax>
+		</bndbox>
+		<fov>1.05</fov>
+		<distance>0.2732</distance>
+	</object>
+</annotation>

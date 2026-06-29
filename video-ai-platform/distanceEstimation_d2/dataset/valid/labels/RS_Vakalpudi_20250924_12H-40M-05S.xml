@@ -1,0 +1,28 @@
+<annotation>
+	<folder>Images_22_23_24cropped</folder>
+	<filename>RS_Vakalpudi_20250924_12H-40M-05S.png</filename>
+	<path>/home/maedelta/Gokul_WS/Images_22_23_24cropped/RS_Vakalpudi_20250924_12H-40M-05S.png</path>
+	<source>
+		<database>Unknown</database>
+	</source>
+	<size>
+		<width>672</width>
+		<height>499</height>
+		<depth>3</depth>
+	</size>
+	<segmented>0</segmented>
+	<object>
+		<name>CARGO_SHIPS</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>121</xmin>
+			<ymin>174</ymin>
+			<xmax>371</xmax>
+			<ymax>306</ymax>
+		</bndbox>
+		<fov>2.69</fov>
+		<distance>0.1726</distance>
+	</object>
+</annotation>

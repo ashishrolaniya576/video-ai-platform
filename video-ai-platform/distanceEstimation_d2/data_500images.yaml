@@ -1,0 +1,9 @@
+# data.yaml
+
+path: dataset  # Root dir of dataset
+
+nc: 21  # Number of classes
+names: ['FISHING_BOAT', 'CARGO_SHIPS', 'TUGS', 'OVERLAY', 'TANKER', 'MILITARY_VESSEL', 'BOUY', 'DREDGING_VESSEL', 'BARGE', 'DREG&UV_OPERATIONS', 'Hopper_Dredger', 'FLOATING_PLATFORM', 'TOWING_VESSEL', 'gantry_crane', 'FISHING_VESSEL', 'LARGE_TOWING_VESSEL', 'PILOT_VESSEL', 'overlay', 'PASSENGER_SHIP', 'HOVERCRAFT','WING_IN_GROUND']
+
+#names: ['Cargo','Tanker', 'MILITARY VESSEL','PILOT VESSEL', 'PASSAENGER VESSEL','Tug','Fishing','DREDGING','Tug','cargo','bouy','military vessel','cargo ship','dredging vessel','High speed craft','offshore supply','offshore tug','patrol vessel','replinishment vessel','gantry_crane']  # Class names
+

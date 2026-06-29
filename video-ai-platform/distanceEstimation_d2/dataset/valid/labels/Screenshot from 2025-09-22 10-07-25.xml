@@ -1,0 +1,42 @@
+<annotation>
+	<folder>Images_22_23_24cropped</folder>
+	<filename>Screenshot from 2025-09-22 10-07-25.png</filename>
+	<path>/home/maedelta/Gokul_WS/Images_22_23_24cropped/Screenshot from 2025-09-22 10-07-25.png</path>
+	<source>
+		<database>Unknown</database>
+	</source>
+	<size>
+		<width>669</width>
+		<height>501</height>
+		<depth>3</depth>
+	</size>
+	<segmented>0</segmented>
+	<object>
+		<name>FISHING_VESSEL</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>276</xmin>
+			<ymin>244</ymin>
+			<xmax>380</xmax>
+			<ymax>277</ymax>
+		</bndbox>
+		<fov>2.49</fov>
+		<distance>0.0587</distance>
+	</object>
+	<object>
+		<name>FIRE_ONBOARD</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>145</xmin>
+			<ymin>15</ymin>
+			<xmax>394</xmax>
+			<ymax>291</ymax>
+		</bndbox>
+		<fov>2.49</fov>
+		<distance>0.0587</distance>
+	</object>
+</annotation>

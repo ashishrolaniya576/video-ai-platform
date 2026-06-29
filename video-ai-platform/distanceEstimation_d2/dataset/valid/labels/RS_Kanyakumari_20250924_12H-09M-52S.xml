@@ -1,0 +1,28 @@
+<annotation>
+	<folder>Images_22_23_24cropped</folder>
+	<filename>RS_Kanyakumari_20250924_12H-09M-52S.png</filename>
+	<path>/home/maedelta/Gokul_WS/Images_22_23_24cropped/RS_Kanyakumari_20250924_12H-09M-52S.png</path>
+	<source>
+		<database>Unknown</database>
+	</source>
+	<size>
+		<width>671</width>
+		<height>501</height>
+		<depth>3</depth>
+	</size>
+	<segmented>0</segmented>
+	<object>
+		<name>FISHING_BOAT</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>227</xmin>
+			<ymin>325</ymin>
+			<xmax>315</xmax>
+			<ymax>355</ymax>
+		</bndbox>
+		<fov>3.54</fov>
+		<distance>0.0910</distance>
+	</object>
+</annotation>

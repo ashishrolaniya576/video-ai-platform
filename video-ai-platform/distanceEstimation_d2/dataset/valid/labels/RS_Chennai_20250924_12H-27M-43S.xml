@@ -1,0 +1,28 @@
+<annotation>
+	<folder>Images_22_23_24cropped</folder>
+	<filename>RS_Chennai_20250924_12H-27M-43S.png</filename>
+	<path>/home/maedelta/Gokul_WS/Images_22_23_24cropped/RS_Chennai_20250924_12H-27M-43S.png</path>
+	<source>
+		<database>Unknown</database>
+	</source>
+	<size>
+		<width>665</width>
+		<height>502</height>
+		<depth>3</depth>
+	</size>
+	<segmented>0</segmented>
+	<object>
+		<name>OFFSHORE_SUPPLY_VESSEL</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>268</xmin>
+			<ymin>207</ymin>
+			<xmax>378</xmax>
+			<ymax>297</ymax>
+		</bndbox>
+		<fov>2.14</fov>
+		<distance>0.3347</distance>
+	</object>
+</annotation>

@@ -1,0 +1,28 @@
+<annotation>
+	<folder>Images_22_23_24cropped</folder>
+	<filename>RS_Chennai_20250924_12H-19M-52S.png</filename>
+	<path>/home/maedelta/Gokul_WS/Images_22_23_24cropped/RS_Chennai_20250924_12H-19M-52S.png</path>
+	<source>
+		<database>Unknown</database>
+	</source>
+	<size>
+		<width>665</width>
+		<height>500</height>
+		<depth>3</depth>
+	</size>
+	<segmented>0</segmented>
+	<object>
+		<name>TANKER</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>628</xmin>
+			<ymin>222</ymin>
+			<xmax>660</xmax>
+			<ymax>242</ymax>
+		</bndbox>
+		<fov>33.55</fov>
+		<distance>0.2864</distance>
+	</object>
+</annotation>

@@ -1,0 +1,28 @@
+<annotation>
+	<folder>Images_22_23_24cropped</folder>
+	<filename>RS_PandianTivu_20250923_09H-51M-06S.png</filename>
+	<path>/home/maedelta/Gokul_WS/Images_22_23_24cropped/RS_PandianTivu_20250923_09H-51M-06S.png</path>
+	<source>
+		<database>Unknown</database>
+	</source>
+	<size>
+		<width>671</width>
+		<height>496</height>
+		<depth>3</depth>
+	</size>
+	<segmented>0</segmented>
+	<object>
+		<name>CARGO_SHIPS</name>
+		<pose>Unspecified</pose>
+		<truncated>1</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>1</xmin>
+			<ymin>207</ymin>
+			<xmax>263</xmax>
+			<ymax>302</ymax>
+		</bndbox>
+		<fov>1.42</fov>
+		<distance>1.0000</distance>
+	</object>
+</annotation>

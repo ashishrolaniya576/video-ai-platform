@@ -1,0 +1,28 @@
+<annotation>
+	<folder>Images_22_23_24cropped</folder>
+	<filename>RS_Porbandar_20250922_10H-00M-49S.png</filename>
+	<path>/home/maedelta/Gokul_WS/Images_22_23_24cropped/RS_Porbandar_20250922_10H-00M-49S.png</path>
+	<source>
+		<database>Unknown</database>
+	</source>
+	<size>
+		<width>667</width>
+		<height>499</height>
+		<depth>3</depth>
+	</size>
+	<segmented>0</segmented>
+	<object>
+		<name>FISHING_VESSEL</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>158</xmin>
+			<ymin>219</ymin>
+			<xmax>418</xmax>
+			<ymax>315</ymax>
+		</bndbox>
+		<fov>3.24</fov>
+		<distance>0.0047</distance>
+	</object>
+</annotation>

@@ -169,36 +169,7 @@ else
     fi
 fi
 
-# =============================================================================
-# MODEL 4: YOLOv11n Object Detection
-# =============================================================================
-banner "YOLOv11n Object Detection"
 
-YOLO_WEIGHTS="$AI_DIR/models_weights/yolo11n.pt"
-mkdir -p "$AI_DIR/models_weights"
-
-if [ -s "$YOLO_WEIGHTS" ]; then
-    success "yolo11n.pt already present ($(du -h "$YOLO_WEIGHTS" | cut -f1)) — skipping"
-else
-    # Ultralytics auto-downloads when the model is instantiated with the path.
-    # We trigger this now so the first API call isn't slow.
-    info "Pre-downloading YOLOv11n weights via ultralytics (~5 MB)…"
-    VENV_PYTHON="$AI_DIR/venv/bin/python"
-    if [ -f "$VENV_PYTHON" ]; then
-        cd "$AI_DIR"
-        "$VENV_PYTHON" -c "
-import sys
-sys.path.insert(0, '.')
-from app.models.object_detection import ObjectDetectionModel
-model = ObjectDetectionModel(device='cpu')
-model.load_model()
-model.cleanup()
-print('YOLO weights downloaded successfully')
-" && success "YOLOv11n weights downloaded"
-    else
-        warn "Python venv not found — YOLO weights will be downloaded on first API call."
-    fi
-fi
 
 # =============================================================================
 # Summary
@@ -208,6 +179,6 @@ echo -e "${BOLD}${GREEN}Model Weight Status:${RESET}"
 echo -e "  RAFT:        $([ -s "$RAFT_WEIGHTS" ] && echo "✓ $(du -h "$RAFT_WEIGHTS" | cut -f1)" || echo "✗ MISSING")"
 echo -e "  PromptIR:    $([ -s "$PROMPTIR_CKPT" ] && echo "✓ $(du -h "$PROMPTIR_CKPT" | cut -f1)" || echo "✗ MISSING")"
 echo -e "  Heavy Rain:  $([ -s "$HEAVYRAIN_CKPT" ] && echo "✓ $(du -h "$HEAVYRAIN_CKPT" | cut -f1)" || echo "✗ MISSING")"
-echo -e "  YOLOv11n:    $([ -s "$YOLO_WEIGHTS" ] && echo "✓ $(du -h "$YOLO_WEIGHTS" | cut -f1)" || echo "○ Will download on first use")"
+echo -e "  Distance Estimation: ✓ Present in repository"
 echo ""
 success "setup_models.sh complete"

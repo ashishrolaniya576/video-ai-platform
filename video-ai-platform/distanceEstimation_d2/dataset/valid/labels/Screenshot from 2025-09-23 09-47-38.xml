@@ -1,0 +1,42 @@
+<annotation>
+	<folder>Images_22_23_24cropped</folder>
+	<filename>Screenshot from 2025-09-23 09-47-38.png</filename>
+	<path>/home/maedelta/Gokul_WS/Images_22_23_24cropped/Screenshot from 2025-09-23 09-47-38.png</path>
+	<source>
+		<database>Unknown</database>
+	</source>
+	<size>
+		<width>671</width>
+		<height>496</height>
+		<depth>3</depth>
+	</size>
+	<segmented>0</segmented>
+	<object>
+		<name>CARGO_SHIPS</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>48</xmin>
+			<ymin>198</ymin>
+			<xmax>418</xmax>
+			<ymax>287</ymax>
+		</bndbox>
+		<fov>1.42</fov>
+		<distance>0.3756</distance>
+	</object>
+	<object>
+		<name>CARGO_SHIPS</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>357</xmin>
+			<ymin>299</ymin>
+			<xmax>599</xmax>
+			<ymax>406</ymax>
+		</bndbox>
+		<fov>1.42</fov>
+		<distance>0.3756</distance>
+	</object>
+</annotation>

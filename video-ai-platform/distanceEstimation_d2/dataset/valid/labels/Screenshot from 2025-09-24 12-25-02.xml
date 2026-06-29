@@ -1,0 +1,28 @@
+<annotation>
+	<folder>Images_22_23_24cropped</folder>
+	<filename>Screenshot from 2025-09-24 12-25-02.png</filename>
+	<path>/home/maedelta/Gokul_WS/Images_22_23_24cropped/Screenshot from 2025-09-24 12-25-02.png</path>
+	<source>
+		<database>Unknown</database>
+	</source>
+	<size>
+		<width>663</width>
+		<height>500</height>
+		<depth>3</depth>
+	</size>
+	<segmented>0</segmented>
+	<object>
+		<name>TANKER</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>204</xmin>
+			<ymin>224</ymin>
+			<xmax>499</xmax>
+			<ymax>323</ymax>
+		</bndbox>
+		<fov>1.67</fov>
+		<distance>0.4032</distance>
+	</object>
+</annotation>

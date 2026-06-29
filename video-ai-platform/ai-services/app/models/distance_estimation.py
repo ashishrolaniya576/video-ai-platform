@@ -1,0 +1,234 @@
+"""
+Distance Estimation Model (DistanceEstimation_d2)
+
+Replaces YOLOv11 for the Object Detection stage.
+Detects objects and estimates their distances.
+"""
+
+from __future__ import annotations
+
+import time
+import os
+from collections import defaultdict
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import cv2
+import yaml
+import numpy as np
+import torch
+
+from app.config.settings import settings
+from app.models.base import BaseModel
+from app.utils.logger import get_logger
+from app.models.distance_est_utils import estModel
+
+logger = get_logger(__name__)
+
+
+# ── Colour palette for bounding boxes (BGR) ──────────────────────────────────
+_PALETTE = [
+    (0, 114, 189),   (217, 83, 25),   (237, 177, 32),  (126, 47, 142),
+    (119, 172, 48),  (77, 190, 238),  (162, 20, 47),   (76, 76, 76),
+    (153, 153, 153), (255, 0, 0),     (255, 128, 0),   (191, 191, 0),
+    (0, 255, 0),     (0, 0, 255),     (170, 0, 255),   (85, 85, 0),
+    (85, 170, 0),    (85, 255, 0),    (170, 85, 0),    (170, 170, 0),
+]
+
+
+def _colour_for(class_id: int) -> tuple:
+    return _PALETTE[class_id % len(_PALETTE)]
+
+
+def read_yaml(yaml_path: str):
+    with open(yaml_path, "r") as f:
+        contents = yaml.safe_load(f)
+    return contents["nc"], contents["names"]
+
+
+def to_tensor_chw_uint(image_bgr: np.ndarray) -> torch.Tensor:
+    """BGR -> RGB -> CHW float32 [0,1]"""
+    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    return torch.tensor(np.transpose(image_rgb, (2, 0, 1)), dtype=torch.float32) / 255.0
+
+
+def scale_to_width_keep_aspect(image_bgr: np.ndarray, width: int) -> np.ndarray:
+    if width is None:
+        return image_bgr
+    h, w = image_bgr.shape[:2]
+    n_w = int(width)
+    n_h = int((h / w) * n_w)
+    return cv2.resize(image_bgr, (n_w, n_h), interpolation=cv2.INTER_AREA)
+
+
+class DistanceEstimationModel(BaseModel):
+    """
+    Distance Estimation model wrapper.
+    """
+
+    name = "DistanceEstimation"
+
+    def __init__(self, device: str) -> None:
+        super().__init__(device)
+        self._model = None
+        self._last_detection_summary: Dict[str, int] = {}
+        self.int_cls = {}
+        self.fov = 0.57
+        self.image_size = 1920
+
+    # ── load_model ────────────────────────────────────────────────────────────
+
+    def load_model(self) -> None:
+        if self._loaded:
+            logger.debug("%s: already loaded — skipping.", self.name)
+            return
+
+        logger.info("Loading Distance Estimation model…")
+
+        weights_path = Path(settings.distance_weights_path).resolve()
+        yaml_path = Path(settings.distance_yaml_path).resolve()
+        
+        if not weights_path.exists():
+            raise FileNotFoundError(f"Model weights not found at {weights_path}")
+        if not yaml_path.exists():
+            raise FileNotFoundError(f"YAML configuration not found at {yaml_path}")
+
+        try:
+            num_classes, class_names = read_yaml(str(yaml_path))
+            cls_int = {c: i + 1 for i, c in enumerate(class_names)}
+            cls_int['background'] = 0
+            self.int_cls = {v: k for k, v in cls_int.items()}
+
+            self._model = estModel(num_classes=num_classes + 1)
+            state = torch.load(str(weights_path), map_location=self._device)
+            self._model.load_state_dict(state)
+            self._model.to(self._device)
+            self._model.eval()
+
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to load Distance Estimation weights from '{weights_path}': {exc}"
+            ) from exc
+
+        self._loaded = True
+        logger.info("Distance Estimation Model Loaded")
+        logger.info("%s: Model loaded successfully on %s.", self.name, self._device.upper())
+
+    # ── process ───────────────────────────────────────────────────────────────
+
+    def process_frame(
+        self,
+        frame: np.ndarray,
+        frame_idx: int,
+        **kwargs: object,
+    ) -> np.ndarray:
+        """
+        Run inference on a single BGR frame and draw annotations.
+        """
+        self._assert_loaded()
+
+        if frame_idx % 25 == 0 or frame_idx == 0:
+            logger.info("%s: Processing Frame %d", self.name, frame_idx)
+
+        conf_thresh: float = float(kwargs.get("conf", settings.distance_confidence_threshold))
+
+        # We must resize to training width (1920) before inference, then scale boxes back, 
+        # OR just resize, infer, draw, and resize back to original.
+        # But wait, resizing back to original is cleaner if the pipeline expects original size.
+        original_h, original_w = frame.shape[:2]
+        
+        # We process using 1920 width
+        scaled_frame = scale_to_width_keep_aspect(frame, self.image_size)
+        scaled_h, scaled_w = scaled_frame.shape[:2]
+        
+        scale_x = original_w / scaled_w
+        scale_y = original_h / scaled_h
+        
+        image_tensor = to_tensor_chw_uint(scaled_frame)
+        inputs = {
+            "image": image_tensor.to(self._device), 
+            "fov": torch.tensor(float(self.fov), dtype=torch.float32).to(self._device)
+        }
+
+        with torch.no_grad():
+            output = self._model([inputs])[0]
+
+        boxes = output["boxes"].cpu()
+        labels = output["labels"].cpu()
+        scores = output["scores"].cpu()
+        distances = output["distances"].cpu()
+
+        # Threshold filter
+        mask = scores > conf_thresh
+        boxes_f = boxes[mask]
+        labels_f = labels[mask]
+        scores_f = scores[mask]
+        distances_f = distances[mask]
+
+        # Work on a copy of original frame so we don't mutate it
+        annotated = frame.copy()
+
+        for box, lbl, scr, dist in zip(boxes_f.numpy(),
+                                       labels_f.numpy(),
+                                       scores_f.numpy(),
+                                       distances_f.numpy()):
+            
+            # Scale coordinates back to original frame size
+            x1 = int(box[0] * scale_x)
+            y1 = int(box[1] * scale_y)
+            x2 = int(box[2] * scale_x)
+            y2 = int(box[3] * scale_y)
+            
+            cls_id = int(lbl)
+            cls_name = self.int_cls.get(cls_id, str(cls_id))
+            colour = _colour_for(cls_id)
+            
+            # Draw bounding box
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), colour, 2)
+            
+            # Build label: "Person 0.85 25.43"
+            label = f"{cls_name.capitalize()} {scr:.2f} {dist:.2f}m"
+            
+            (text_w, text_h), baseline = cv2.getTextSize(
+                label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1
+            )
+            label_y1 = max(y1 - text_h - baseline - 4, 0)
+            cv2.rectangle(
+                annotated,
+                (x1, label_y1),
+                (x1 + text_w + 4, label_y1 + text_h + baseline + 4),
+                colour,
+                cv2.FILLED,
+            )
+            
+            cv2.putText(
+                annotated,
+                label,
+                (x1 + 2, label_y1 + text_h + 2),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+            
+            self._last_detection_summary[cls_name] = self._last_detection_summary.get(cls_name, 0) + 1
+
+        return annotated
+
+    # ── cleanup ───────────────────────────────────────────────────────────────
+
+    def cleanup(self) -> None:
+        """Release GPU memory and reset state."""
+        if self._model is not None:
+            del self._model
+            self._model = None
+        self._last_detection_summary = {}
+        if self._device == "cuda":
+            try:
+                torch.cuda.empty_cache()
+                logger.debug("%s: CUDA cache cleared.", self.name)
+            except Exception:
+                pass
+        self._loaded = False
+        logger.info("%s: Model Closed and resources released.", self.name)

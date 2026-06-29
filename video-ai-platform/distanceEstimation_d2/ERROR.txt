@@ -1,0 +1,73 @@
+ERROR::::
+
+
+v\Scripts\python.exe .\train.py --batch 2 --size 640 --epoch 10 --yaml "data.yaml" --workers 8istanceEstimation_d2>
+train samples: 15
+valid samples: 4
+C:\Users\Ashok BS\Documents\Muttu\radar_classification_14_jun\.venv\Lib\site-packages\torchvision\models\_utils.py:135: UserWarning: Using 'backbone_name' as positional parameter(s) is deprecated since 0.13 and may be removed in the future. Please use keyword parameter(s) instead.
+  warnings.warn(
+C:\Users\Ashok BS\Documents\Muttu\radar_classification_14_jun\.venv\Lib\site-packages\torchvision\models\_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+C:\Users\Ashok BS\Documents\Muttu\radar_classification_14_jun\.venv\Lib\site-packages\torchvision\models\_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=ResNet50_Weights.IMAGENET1K_V1`. You can also use `weights=ResNet50_Weights.DEFAULT` to get the most up-to-date weights.
+  warnings.warn(msg)
+Epoch: 1
+Traceback (most recent call last):
+  File "C:\Users\Ashok BS\Documents\Muttu\radar_classification_14_jun\radar_classification_14_jun\distanceEstimation_d2\train.py", line 47, in <module>
+    for batch_data in train_dataloader:
+                      ^^^^^^^^^^^^^^^^
+  File "C:\Users\Ashok BS\Documents\Muttu\radar_classification_14_jun\.venv\Lib\site-packages\torch\utils\data\dataloader.py", line 734, in __next__
+    data = self._next_data()
+  File "C:\Users\Ashok BS\Documents\Muttu\radar_classification_14_jun\.venv\Lib\site-packages\torch\utils\data\dataloader.py", line 790, in _next_data
+    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration
+  File "C:\Users\Ashok BS\Documents\Muttu\radar_classification_14_jun\.venv\Lib\site-packages\torch\utils\data\_utils\fetch.py", line 52, in fetch
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+            ~~~~~~~~~~~~^^^^^
+  File "C:\Users\Ashok BS\Documents\Muttu\radar_classification_14_jun\radar_classification_14_jun\distanceEstimation_d2\model_utils.py", line 94, in __getitem__
+    fov, targets = self.annotations(lbl_PATH) ##
+                   ~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\Ashok BS\Documents\Muttu\radar_classification_14_jun\radar_classification_14_jun\distanceEstimation_d2\model_utils.py", line 49, in annotations
+    tree = ET.parse(path)
+  File "C:\Users\Ashok BS\AppData\Local\Programs\Python\Python313\Lib\xml\etree\ElementTree.py", line 1204, in parse
+    tree.parse(source, parser)
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "C:\Users\Ashok BS\AppData\Local\Programs\Python\Python313\Lib\xml\etree\ElementTree.py", line 569, in parse
+    self._root = parser._parse_whole(source)
+                 ~~~~~~~~~~~~~~~~~~~^^^^^^^^
+xml.etree.ElementTree.ParseError: mismatched tag: line 40, column 16
+PS C:\Users\Ashok BS\Documents\Muttu\radar_classification_14_jun\radar_classification_14_jun\distanceEstimation_d2>
+
+
+
+Training xml sample :
+
+
+
+<annotation>
+	<folder>images</folder>
+	<filename>Screenshot from 2025-07-17 10-09-39.png</filename>
+	<path>C:\TO-ICG-AUG-2925\videos\images-1th-july1\datadir\images\Screenshot from 2025-07-17 10-09-39.png</path>
+	<source>
+		<database>Unknown</database>
+	</source>
+	<size>
+		<width>1920</width>
+		<height>1200</height>
+		<depth>3</depth>
+	</size>
+	<segmented>0</segmented>
+	<object>
+		<name>CARGO</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>225</xmin>
+			<ymin>247</ymin>
+			<xmax>471</xmax>
+			<ymax>541</ymax>
+		</bndbox>
+		<distance>0.527982091</distance>
+		<fov>0.50</fov>
+	</object>
+</annotation>
+

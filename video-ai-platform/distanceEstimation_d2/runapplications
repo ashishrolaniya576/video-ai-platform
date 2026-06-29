@@ -1,0 +1,22 @@
+
+Gradio URL:
+
+PS C:\Users\Ashok BS\Documents\Muttu\radar_classification_14_jun\radar_classification_14_jun\distanceEstimation_d2> ..\..\.venv\Scripts\python.exe .\inference_api.py --gradio --host 0.0.0.0 --port 8010
+
+Flask API:
+PS C:\Users\Ashok BS\Documents\Muttu\radar_classification_14_jun\radar_classification_14_jun\distanceEstimation_d2> ..\..\.venv\Scripts\python.exe .\inference_api.py --host 0.0.0.0 --port 8010
+
+Orihinal INference script:
+PS C:\Users\Ashok BS\Documents\Muttu\radar_classification_14_jun\radar_classification_14_jun\distanceEstimation_d2> ..\..\.venv\Scripts\python.exe .\inference_api.py   
+
+
+http://127.0.0.1:8010/predict?file=...&fov=0.57...
+
+
+
+FINAL:
+
+PS C:\Users\Ashok BS\Documents\Muttu\radar_classification_14_jun\radar_classification_14_jun\distanceEstimation_d2> ..\..\.venv\Scripts\python.exe .\inference_api_v2.py  --mode gradio --host 0.0.0.0 --port 8010
+
+FINAL API
+PS C:\Users\Ashok BS\Documents\Muttu\radar_classification_14_jun\radar_classification_14_jun\distanceEstimation_d2> ..\..\.venv\Scripts\python.exe '.\apiclient_v1,py'

@@ -40,9 +40,9 @@ class ProcessRequestSchema(BaseModel):
         default=False, alias="videoVisibility",
         description="Enable PromptIR visibility enhancement.",
     )
-    objectDetection: bool = Field(
-        default=False, alias="objectDetection",
-        description="Enable YOLOv11n object detection with bounding boxes.",
+    distanceEstimation: bool = Field(
+        default=False, alias="distanceEstimation",
+        description="Enable Distance Estimation with bounding boxes.",
     )
 
     model_config = {"populate_by_name": True}

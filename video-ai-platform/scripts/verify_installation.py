@@ -205,11 +205,7 @@ def main() -> int:
         "HeavyRain-stage2-2019-05-11-76_ckpt.pth.tar",
         min_bytes=100 * 1024 * 1024,  # 100 MB minimum
     )
-    yolo_path = AI_DIR / "models_weights" / "yolo11n.pt"
-    if yolo_path.exists() and yolo_path.stat().st_size > 1024:
-        report.add("YOLOv11n yolo11n.pt", "PASS", f"{yolo_path.stat().st_size / 1024 / 1024:.1f} MB  {yolo_path}")
-    else:
-        report.add("YOLOv11n yolo11n.pt", "WARN", "Not found — will auto-download on first API call")
+
 
     # =========================================================================
     # 5. Python packages
@@ -225,7 +221,6 @@ def main() -> int:
         ("numpy", False),
         ("scipy", False),
         ("PIL", False),
-        ("ultralytics", False),
         ("einops", False),
         ("lightning", True),       # pytorch-lightning imports as lightning
         ("tqdm", False),
@@ -272,7 +267,6 @@ def main() -> int:
         "app.models.stabilize",
         "app.models.heavy_rain_remove",
         "app.models.video_visibility",
-        "app.models.object_detection",
         "app.pipeline.pipeline",
         "app.api.process",
         "app.api.health",

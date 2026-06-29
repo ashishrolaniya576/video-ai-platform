@@ -1,0 +1,13 @@
+from google.colab import drive
+drive.mount('/content/drive/')
+%cd /content/drive/MyDrive/distanceEstimation_d2/
+!pip install -r  /content/drive/MyDrive/distanceEstimation_d2/requirements.txt
+!python train.py --batch 2 --size 1920 --epoch 50 --yaml "data.yaml" --workers 16
+
+!python inferencetest.py
+
+"rtsp://10.10.125.30:4554/eoss/1061"
+
+ffmpeg -rtsp_transport tcp -stimeout 5000000 -i "rtsp://10.10.125.30:4554/eoss/1061" -vf "fps=1/5" -qscale:v 2 "images/frame_%Y%m%d_%H%M%S.jpg"
+
+rtsp://10.10.x.x:1201/test/1

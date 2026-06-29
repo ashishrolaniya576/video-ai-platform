@@ -39,9 +39,9 @@ const FEATURES = [
     color: 'purple',
   },
   {
-    id: 'objectDetection',
-    label: 'Object Detection',
-    description: 'Detect people, vehicles, animals, traffic objects, and other common objects in every video frame using YOLOv11.',
+    id: 'distanceEstimation',
+    label: 'Distance Estimation',
+    description: 'Detect objects and estimate their distance using the DistanceEstimation_d2 model.',
     icon: (
       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
         {/* Bounding box / scan icon */}

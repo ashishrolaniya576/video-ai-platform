@@ -67,7 +67,7 @@ async function processJob(jobId, videoUrl, features, emitProgress) {
       stabilization: Boolean(features.stabilization),
       heavyRainRemoval: Boolean(features.heavyRainRemoval),
       videoVisibility: Boolean(features.videoVisibility),
-      objectDetection: Boolean(features.objectDetection),
+      distanceEstimation: Boolean(features.distanceEstimation),
     };
 
     const response = await axios.post(`${AI_SERVICE_URL}/process`, payload, {

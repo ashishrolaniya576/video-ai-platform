@@ -29,7 +29,7 @@ from app.api.health import router as health_router
 from app.api.process import router as process_router
 from app.config.settings import settings
 from app.models.heavy_rain_remove import HeavyRainRemovalModel
-from app.models.object_detection import ObjectDetectionModel
+from app.models.distance_estimation import DistanceEstimationModel
 from app.models.stabilize import StabilizationModel
 from app.models.video_visibility import VideoVisibilityModel
 from app.pipeline.pipeline import PipelineManager
@@ -63,27 +63,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         "stabilization": StabilizationModel(device=device),
         "heavy_rain_removal": HeavyRainRemovalModel(device=device),
         "video_visibility": VideoVisibilityModel(device=device),
-        "object_detection": ObjectDetectionModel(device=device),
+        "distance_estimation": DistanceEstimationModel(device=device),
     }
 
-    # Load all models into memory — weights are loaded exactly once here
-    for feature_name, model in models.items():
-        try:
-            logger.info("Loading model: %s…", model.name)
-            model.load_model()
-            logger.info("Model loaded: %s ✓", model.name)
-        except FileNotFoundError as exc:
-            logger.warning(
-                "Model '%s' weights not found — feature will be unavailable: %s",
-                feature_name,
-                exc,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.error(
-                "Failed to load model '%s': %s — feature will be unavailable.",
-                feature_name,
-                exc,
-            )
+    # Models are no longer eagerly loaded here to optimize memory.
+    # They are lazy-loaded by PipelineManager and cleaned up per-request.
 
     # Build pipeline and attach to app state
     pipeline = PipelineManager(models=models)
@@ -114,8 +98,8 @@ def create_app() -> FastAPI:
         title="VideoAI Processing Service",
         description=(
             "AI-powered video processing service providing stabilization, "
-            "heavy rain removal, visibility enhancement, and object detection "
-            "via RAFT, HeavyRainRemoval, PromptIR, and YOLOv11."
+            "heavy rain removal, visibility enhancement, and distance estimation "
+            "via RAFT, HeavyRainRemoval, PromptIR, and DistanceEstimation."
         ),
         version="1.0.0",
         docs_url="/docs",

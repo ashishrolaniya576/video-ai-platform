@@ -1,0 +1,28 @@
+<annotation>
+	<folder>Images_22_23_24cropped</folder>
+	<filename>Screenshot from 2025-09-24 12-25-16.png</filename>
+	<path>/home/maedelta/Gokul_WS/Images_22_23_24cropped/Screenshot from 2025-09-24 12-25-16.png</path>
+	<source>
+		<database>Unknown</database>
+	</source>
+	<size>
+		<width>665</width>
+		<height>502</height>
+		<depth>3</depth>
+	</size>
+	<segmented>0</segmented>
+	<object>
+		<name>OFFSHORE_SUPPLY_VESSEL</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>419</xmin>
+			<ymin>197</ymin>
+			<xmax>562</xmax>
+			<ymax>290</ymax>
+		</bndbox>
+		<fov>1.84</fov>
+		<distance>0.336</distance>
+	</object>
+</annotation>

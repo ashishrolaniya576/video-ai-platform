@@ -86,12 +86,14 @@ class Settings(BaseSettings):
     promptir_contrast_beta: float = Field(default=10.0, alias="PROMPTIR_CONTRAST_BETA")
     promptir_clahe_clip: float = Field(default=1.5, alias="PROMPTIR_CLAHE_CLIP")
 
-    # ── Object Detection (YOLOv11n) ───────────────────────────
-    yolo_weights_path: Path = Field(
-        default=Path("models_weights/yolo11n.pt"), alias="YOLO_WEIGHTS_PATH"
+    # ── Distance Estimation ───────────────────────────────────
+    distance_weights_path: Path = Field(
+        default=Path("../distanceEstimation_d2/best.pth"), alias="DISTANCE_WEIGHTS_PATH"
     )
-    yolo_confidence_threshold: float = Field(default=0.35, alias="YOLO_CONFIDENCE_THRESHOLD")
-    yolo_iou_threshold: float = Field(default=0.45, alias="YOLO_IOU_THRESHOLD")
+    distance_yaml_path: Path = Field(
+        default=Path("../distanceEstimation_d2/data.yaml"), alias="DISTANCE_YAML_PATH"
+    )
+    distance_confidence_threshold: float = Field(default=0.3, alias="DISTANCE_CONFIDENCE_THRESHOLD")
 
     @field_validator("output_dir", "temp_dir", "models_dir", mode="after")
     @classmethod
@@ -112,8 +114,10 @@ class Settings(BaseSettings):
             self.raft_repo_path = (AI_SERVICES_DIR / self.raft_repo_path).resolve()
         if not self.raft_model_path.is_absolute():
             self.raft_model_path = (AI_SERVICES_DIR / self.raft_model_path).resolve()
-        if not self.yolo_weights_path.is_absolute():
-            self.yolo_weights_path = (AI_SERVICES_DIR / self.yolo_weights_path).resolve()
+        if not self.distance_weights_path.is_absolute():
+            self.distance_weights_path = (AI_SERVICES_DIR / self.distance_weights_path).resolve()
+        if not self.distance_yaml_path.is_absolute():
+            self.distance_yaml_path = (AI_SERVICES_DIR / self.distance_yaml_path).resolve()
         return self
 
     def resolve_device(self) -> str:

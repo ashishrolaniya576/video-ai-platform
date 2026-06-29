@@ -50,7 +50,7 @@ class ProcessingRequest:
     stabilization: bool = False
     heavy_rain_removal: bool = False
     video_visibility: bool = False
-    object_detection: bool = False
+    distance_estimation: bool = False
 
     @property
     def has_any_feature(self) -> bool:
@@ -84,7 +84,7 @@ class PipelineManager:
     """
 
     # Canonical order in which models are applied
-    _MODEL_ORDER = ["stabilization", "heavy_rain_removal", "video_visibility", "object_detection"]
+    _MODEL_ORDER = ["stabilization", "heavy_rain_removal", "video_visibility", "distance_estimation"]
 
     def __init__(self, models: Dict[str, BaseModel]) -> None:
         """
@@ -240,7 +240,10 @@ class PipelineManager:
             )
 
         finally:
+            # 5. Clean up temporary files and unload models to save memory
             cleanup_paths(*temp_paths)
+            for _, model in active_models:
+                model.cleanup()
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
@@ -253,7 +256,7 @@ class PipelineManager:
             raise ValueError(
                 "No processing features enabled. "
                 "Set at least one of: stabilization, heavyRainRemoval, "
-                "videoVisibility, objectDetection."
+                "videoVisibility, distanceEstimation."
             )
         log("Request validated successfully.")
 
@@ -273,7 +276,7 @@ class PipelineManager:
             "stabilization": request.stabilization,
             "heavy_rain_removal": request.heavy_rain_removal,
             "video_visibility": request.video_visibility,
-            "object_detection": request.object_detection,
+            "distance_estimation": request.distance_estimation,
         }
 
         for feature_name in self._MODEL_ORDER:
@@ -285,11 +288,9 @@ class PipelineManager:
                 raise RuntimeError(
                     f"Feature '{feature_name}' is enabled but no model is registered for it."
                 )
-            if not model.is_loaded:
-                raise RuntimeError(
-                    f"Model for '{feature_name}' is not loaded. "
-                    "Ensure load_model() was called at startup."
-                )
+            if not model._loaded:
+                log(f"Lazy loading model for {feature_name}...")
+                model.load_model()
 
             active.append((feature_name, model))
 

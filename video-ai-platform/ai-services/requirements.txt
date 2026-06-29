@@ -11,7 +11,7 @@ python-dotenv==1.0.1
 # For CUDA 12.1: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 torch>=2.1.0
 torchvision>=0.16.0
-ultralytics>=8.3.0
+PyYAML>=6.0
 
 # ── Computer vision ───────────────────────────────────────────────────────────
 # Note: ultralytics pulls opencv-python; opencv-python-headless is kept for
