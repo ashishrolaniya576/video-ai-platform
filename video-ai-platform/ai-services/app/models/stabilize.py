@@ -37,6 +37,7 @@ RAFT source:    RAFT/core/  (https://github.com/princeton-vl/RAFT)
 
 from __future__ import annotations
 
+import inspect
 import sys
 import time
 from pathlib import Path
@@ -45,6 +46,7 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
 from scipy.ndimage import uniform_filter1d
 
 from app.config.settings import settings
@@ -106,6 +108,8 @@ class StabilizationModel(BaseModel):
         self._iters: int              = settings.raft_iters               # 20
         self._corrections: List[np.ndarray] = []
         self._grid_cache: dict[tuple[int, int], np.ndarray] = {}
+        self._input_buffer: Optional[torch.Tensor] = None
+        self._raft_supports_cached_fmap1: bool = False
 
     # ═══════════════════════════════════════════════════════════════════════════
     # BaseModel interface
@@ -177,7 +181,17 @@ class StabilizationModel(BaseModel):
         t0 = time.perf_counter()
 
         torch_device = torch.device(self._device)
-        model = RAFT(_RAFTArgs())
+        args = _RAFTArgs()
+        args.mixed_precision = self._device == "cuda"
+
+        model = RAFT(args)
+        # Ensure RAFT uses the modern amp autocast API during inference
+        import raft as raft_module
+        def _raft_autocast(*args, **kwargs):
+            if len(args) == 0 and 'device_type' not in kwargs:
+                kwargs['device_type'] = 'cuda'
+            return torch.amp.autocast(*args, **kwargs)
+        raft_module.autocast = _raft_autocast
 
         # torch.load with weights_only=False is required for RAFT's older
         # checkpoint format which uses pickle (not the newer safetensors format).
@@ -192,8 +206,8 @@ class StabilizationModel(BaseModel):
         state_dict = {k.replace("module.", ""): v for k, v in weights.items()}
         model.load_state_dict(state_dict)
         model = model.to(torch_device).eval()
-
         self._raft = model
+        self._raft_supports_cached_fmap1 = 'cached_fmap1' in inspect.signature(self._raft.forward).parameters
         self._loaded = True
 
         elapsed = time.perf_counter() - t0
@@ -323,13 +337,13 @@ class StabilizationModel(BaseModel):
             return torch.from_numpy(rgb).permute(2,0,1).float().unsqueeze(0).to(device)
         """
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        return (
-            torch.from_numpy(rgb)
-            .permute(2, 0, 1)     # HWC → CHW
-            .float()
-            .unsqueeze(0)         # → [1, C, H, W]
-            .to(self._device, non_blocking=True)
-        )
+        tensor = torch.from_numpy(rgb).permute(2, 0, 1).float()
+
+        if self._input_buffer is None or self._input_buffer.shape != tensor.shape:
+            self._input_buffer = torch.empty_like(tensor, pin_memory=True)
+
+        self._input_buffer.copy_(tensor)
+        return self._input_buffer.unsqueeze(0).to(self._device, non_blocking=True)
 
     def _estimate_flow(self, t1: torch.Tensor, t2: torch.Tensor, padder, h_orig: int, w_orig: int, cached_fmap1, cached_cnet1) -> tuple:
         """
@@ -340,11 +354,10 @@ class StabilizationModel(BaseModel):
             import inspect
             sig = inspect.signature(self._raft.forward)
             
-            if 'cached_fmap1' in sig.parameters:
-                # Optimized inference path (our custom patch is present)
+            if self._raft_supports_cached_fmap1:
                 result = self._raft(
-                    t1, t2, iters=self._iters, test_mode=True, 
-                    cached_fmap1=cached_fmap1, cached_cnet1=cached_cnet1
+                    t1, t2, iters=self._iters, test_mode=True,
+                    cached_fmap1=cached_fmap1, cached_cnet1=cached_cnet1,
                 )
                 if len(result) == 4:
                     _, flow_up, fmap2, cnet2 = result
@@ -352,19 +365,20 @@ class StabilizationModel(BaseModel):
                     _, flow_up = result
                     fmap2, cnet2 = None, None
             else:
-                # Standard inference path (pristine upstream RAFT)
                 _, flow_up = self._raft(t1, t2, iters=self._iters, test_mode=True)
                 fmap2, cnet2 = None, None
 
-            # Unpad, remove batch dim, CHW → HWC, move to CPU
-            flow = padder.unpad(flow_up)[0].permute(1, 2, 0).cpu().numpy()
-
-        # Resize flow from inference resolution back to original frame resolution
-        flow = cv2.resize(flow, (w_orig, h_orig), interpolation=cv2.INTER_LINEAR)
-
-        # Rescale flow magnitudes to match original pixel coordinates
-        flow[..., 0] *= w_orig / self._flow_w   # dx scale
-        flow[..., 1] *= h_orig / self._flow_h   # dy scale
+            # Unpad, resize and rescale on GPU, then transfer to CPU once
+            flow = padder.unpad(flow_up)[0].unsqueeze(0)
+            flow = F.interpolate(
+                flow,
+                size=(h_orig, w_orig),
+                mode='bilinear',
+                align_corners=False,
+            )
+            flow[:, 0, :, :] *= float(w_orig) / float(self._flow_w)
+            flow[:, 1, :, :] *= float(h_orig) / float(self._flow_h)
+            flow = flow[0].permute(1, 2, 0).cpu().numpy()
 
         return flow, fmap2, cnet2
 

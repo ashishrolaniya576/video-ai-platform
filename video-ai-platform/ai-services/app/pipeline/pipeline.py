@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import cv2
 import numpy as np
 import torch
 if torch.cuda.is_available():
