@@ -66,8 +66,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         "distance_estimation": DistanceEstimationModel(device=device),
     }
 
-    # Models are no longer eagerly loaded here to optimize memory.
-    # They are lazy-loaded by PipelineManager and cleaned up per-request.
+    # Validate models at startup (fail fast)
+    logger.info("Validating AI models and checkpoints...")
+    for name, model in models.items():
+        try:
+            model.load_model()
+            if not model.is_available:
+                logger.warning(f"Model {name} validation failed: {model.unavailable_reason}")
+            model.cleanup()
+        except Exception as e:
+            logger.warning(f"Failed to validate model {name} during startup: {e}")
 
     # Build pipeline and attach to app state
     pipeline = PipelineManager(models=models)

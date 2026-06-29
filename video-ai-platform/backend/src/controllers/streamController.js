@@ -42,7 +42,9 @@ async function startProcessing(req, res, next) {
     } = req.body;
 
     const videoSource = (tempPath || videoUrl || '').trim();
-    const isTempFile = Boolean(tempPath && tempPath.trim());
+    
+    // An input is only a temporary file if it's provided and it's NOT an HTTP stream URL
+    const isTempFile = Boolean(tempPath && tempPath.trim() && !tempPath.trim().startsWith('http'));
 
     if (isTempFile) {
       const path = require('path');
@@ -117,6 +119,7 @@ async function getStatus(req, res, next) {
       status: job.status,
       progress: job.progress,
       currentStage: job.currentStage,
+      error: job.error,
     });
   } catch (err) {
     next(err);

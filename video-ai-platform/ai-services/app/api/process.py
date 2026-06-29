@@ -24,6 +24,7 @@ router = APIRouter()
 # ── Request / Response schemas ─────────────────────────────────────────────────
 
 GLOBAL_PROGRESS = {}
+CANCELLATION_REGISTRY = set()
 
 @router.get(
     "/progress",
@@ -32,6 +33,26 @@ GLOBAL_PROGRESS = {}
 )
 async def get_progress(video_path: str):
     return {"progress": GLOBAL_PROGRESS.get(video_path, 0)}
+
+class CancelRequestSchema(BaseModel):
+    videoPath: str = Field(..., description="Local file path or streaming URL to cancel.")
+    
+    @field_validator("videoPath")
+    @classmethod
+    def video_path_must_not_be_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("videoPath must not be empty.")
+        return v.strip()
+
+@router.post(
+    "/cancel",
+    status_code=status.HTTP_200_OK,
+    summary="Cancel a running job",
+)
+async def cancel_job(body: CancelRequestSchema):
+    logger.info("POST /cancel requested for videoPath=%s", body.videoPath)
+    CANCELLATION_REGISTRY.add(body.videoPath)
+    return {"status": "cancelled"}
 
 class ProcessRequestSchema(BaseModel):
     """

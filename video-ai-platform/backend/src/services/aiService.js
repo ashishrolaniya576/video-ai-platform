@@ -28,6 +28,19 @@ function getJob(jobId) {
   return jobs.get(jobId) || null;
 }
 
+function cancelJob(jobId) {
+  const job = jobs.get(jobId);
+  if (!job) return;
+  if (['completed', 'failed', 'cancelled'].includes(job.status)) return;
+  
+  logger.info(`[Job ${jobId}] Cancelling job...`);
+  job.status = 'cancelled';
+  
+  // Attempt to notify FastAPI
+  axios.post(`${AI_SERVICE_URL}/cancel`, { videoPath: job.videoUrl })
+    .catch((err) => logger.error(`[Job ${jobId}] FastAPI cancel failed: ${err.message}`));
+}
+
 async function processJob(jobId, videoUrl, features, emitProgress) {
   const job = jobs.get(jobId);
   if (!job) return;
@@ -72,6 +85,11 @@ async function processJob(jobId, videoUrl, features, emitProgress) {
 
     // Polling mechanism to fetch real-time frame progress from FastAPI
     const progressInterval = setInterval(async () => {
+      // Stop polling if the job was cancelled externally
+      if (job.status === 'cancelled') {
+        clearInterval(progressInterval);
+        return;
+      }
       try {
         const res = await axios.get(`${AI_SERVICE_URL}/progress?video_path=${encodeURIComponent(videoUrl)}`);
         if (res.data && res.data.progress) {
@@ -94,6 +112,12 @@ async function processJob(jobId, videoUrl, features, emitProgress) {
       response = await axios.post(`${AI_SERVICE_URL}/process`, payload, {
         timeout: 30 * 60 * 1000, // 30 minutes — large videos can take significant time
       });
+    } catch (e) {
+      if (job.status === 'cancelled') {
+        // The request may have failed due to our interruption or network
+        throw new Error('Processing cancelled by user.');
+      }
+      throw e;
     } finally {
       clearInterval(progressInterval);
     }
@@ -157,6 +181,7 @@ async function processJob(jobId, videoUrl, features, emitProgress) {
 
     job.status = 'failed';
     job.currentStage = 'Failed';
+    job.error = errMsg;
     job.completedAt = new Date().toISOString();
 
     emitProgress(jobId, {
@@ -169,4 +194,4 @@ async function processJob(jobId, videoUrl, features, emitProgress) {
   }
 }
 
-module.exports = { createJob, getJob, processJob };
+module.exports = { createJob, getJob, processJob, cancelJob };

@@ -33,7 +33,7 @@ export function subscribeToJob(jobId, handlers) {
   const s = getSocket();
   s.emit('subscribe_job', jobId);
 
-  const { onProgress, onCompleted, onFailed, onSubscribed, onConnect, onDisconnect } = handlers;
+  const { onProgress, onCompleted, onFailed, onSubscribed, onConnect, onDisconnect, onConnectError } = handlers;
 
   if (onSubscribed) s.on('subscribed', onSubscribed);
   if (onProgress) s.on('progress_update', onProgress);
@@ -41,6 +41,7 @@ export function subscribeToJob(jobId, handlers) {
   if (onFailed) s.on('processing_failed', onFailed);
   if (onConnect) s.on('connect', onConnect);
   if (onDisconnect) s.on('disconnect', onDisconnect);
+  if (onConnectError) s.on('connect_error', onConnectError);
 
   return () => {
     s.emit('unsubscribe_job', jobId);
@@ -50,7 +51,19 @@ export function subscribeToJob(jobId, handlers) {
     if (onFailed) s.off('processing_failed', onFailed);
     if (onConnect) s.off('connect', onConnect);
     if (onDisconnect) s.off('disconnect', onDisconnect);
+    if (onConnectError) s.off('connect_error', onConnectError);
   };
+}
+
+export function cancelJobEvent(jobId) {
+  const s = getSocket();
+  if (s) {
+    s.emit('cancel_job', jobId);
+  }
+}
+
+export function isSocketConnected() {
+  return socket ? socket.connected : false;
 }
 
 export function disconnectSocket() {

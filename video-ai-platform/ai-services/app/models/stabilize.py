@@ -202,7 +202,7 @@ class StabilizationModel(BaseModel):
             self.name, elapsed, self._device.upper(),
         )
 
-    def compute_corrections(self, reader) -> None:
+    def compute_corrections(self, reader, cancel_callback=None) -> None:
         """
         Pass 1: Compute optical flow and global trajectory corrections.
         Reads the entire video stream frame-by-frame, ensuring O(1) RAM usage.
@@ -234,6 +234,9 @@ class StabilizationModel(BaseModel):
                 padder = self._InputPadder(t.shape)
             
             t2 = padder.pad(t)[0]
+
+            if cancel_callback and cancel_callback():
+                raise InterruptedError("Processing cancelled by user.")
 
             if cached_t1 is None:
                 # First frame, just cache it
@@ -331,13 +334,27 @@ class StabilizationModel(BaseModel):
     def _estimate_flow(self, t1: torch.Tensor, t2: torch.Tensor, padder, h_orig: int, w_orig: int, cached_fmap1, cached_cnet1) -> tuple:
         """
         Estimate RAFT optical flow using cached tensors and feature maps.
+        Gracefully falls back to standard inference if the upstream repo does not support caching.
         """
         with torch.inference_mode(), torch.autocast(device_type=self._device, enabled=self._device=="cuda"):
-            # RAFT returns (flow_low, flow_up, fmap2, cnet2); we use flow_up (full resolution)
-            _, flow_up, fmap2, cnet2 = self._raft(
-                t1, t2, iters=self._iters, test_mode=True, 
-                cached_fmap1=cached_fmap1, cached_cnet1=cached_cnet1
-            )
+            import inspect
+            sig = inspect.signature(self._raft.forward)
+            
+            if 'cached_fmap1' in sig.parameters:
+                # Optimized inference path (our custom patch is present)
+                result = self._raft(
+                    t1, t2, iters=self._iters, test_mode=True, 
+                    cached_fmap1=cached_fmap1, cached_cnet1=cached_cnet1
+                )
+                if len(result) == 4:
+                    _, flow_up, fmap2, cnet2 = result
+                else:
+                    _, flow_up = result
+                    fmap2, cnet2 = None, None
+            else:
+                # Standard inference path (pristine upstream RAFT)
+                _, flow_up = self._raft(t1, t2, iters=self._iters, test_mode=True)
+                fmap2, cnet2 = None, None
 
             # Unpad, remove batch dim, CHW → HWC, move to CPU
             flow = padder.unpad(flow_up)[0].permute(1, 2, 0).cpu().numpy()

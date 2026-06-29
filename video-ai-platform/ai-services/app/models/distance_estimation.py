@@ -75,6 +75,12 @@ class DistanceEstimationModel(BaseModel):
         self.int_cls = {}
         self.fov = 0.57
         self.image_size = 1920
+        self.available = True
+        self.unavailable_reason = ""
+
+    @property
+    def is_available(self) -> bool:
+        return self.available
 
     # ── load_model ────────────────────────────────────────────────────────────
 
@@ -89,9 +95,16 @@ class DistanceEstimationModel(BaseModel):
         yaml_path = Path(settings.distance_yaml_path).resolve()
         
         if not weights_path.exists():
-            raise FileNotFoundError(f"Model weights not found at {weights_path}")
+            self.available = False
+            self.unavailable_reason = f"Distance Estimation model weights were not found. Expected location: distanceEstimation_d2/best.pth. The repository does not include the required weights."
+            logger.warning(self.unavailable_reason)
+            return
+            
         if not yaml_path.exists():
-            raise FileNotFoundError(f"YAML configuration not found at {yaml_path}")
+            self.available = False
+            self.unavailable_reason = f"Distance Estimation YAML configuration not found at {yaml_path}"
+            logger.warning(self.unavailable_reason)
+            return
 
         try:
             num_classes, class_names = read_yaml(str(yaml_path))
@@ -106,9 +119,10 @@ class DistanceEstimationModel(BaseModel):
             self._model.eval()
 
         except Exception as exc:
-            raise RuntimeError(
-                f"Failed to load Distance Estimation weights from '{weights_path}': {exc}"
-            ) from exc
+            self.available = False
+            self.unavailable_reason = f"Failed to load Distance Estimation weights from '{weights_path}': {exc}"
+            logger.warning(self.unavailable_reason)
+            return
 
         self._loaded = True
         logger.info("Distance Estimation Model Loaded")

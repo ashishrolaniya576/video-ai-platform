@@ -74,87 +74,47 @@ function normalizeUrl(url, sourceType) {
 }
 
 // ── yt-dlp downloader (YouTube / Vimeo) ──────────────────────────────────────
-async function downloadWithYtDlp(url, outputPath) {
-  logger.info(`[Downloader] Using yt-dlp for: ${url}`);
+async function downloadWithYtDlp(url) {
+  logger.info(`[Downloader] Using yt-dlp to extract stream URL for: ${url}`);
 
-  // yt-dlp options:
-  // -f bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4/best  → prefer mp4
-  // --merge-output-format mp4
-  // -o <outputPath>
   const args = [
-    '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4/best',
-    '--merge-output-format', 'mp4',
+    '-f', 'bestvideo[ext=mp4]/best[ext=mp4]/best',
     '--no-playlist',
     '--no-warnings',
-    '-o', outputPath,
+    '-g', // Get URL instead of downloading
     url,
   ];
 
+  let streamUrl = '';
   try {
     const ytDlpBin = process.env.YTDLP_BIN || 'yt-dlp';
     const { stdout, stderr } = await execFileAsync(ytDlpBin, args, {
-      timeout: 10 * 60 * 1000, // 10 minutes
+      timeout: 2 * 60 * 1000, // 2 minutes should be plenty for just resolving URL
     });
-    if (stdout) logger.debug(`[yt-dlp stdout] ${stdout.trim()}`);
+    if (stdout) {
+      streamUrl = stdout.trim().split('\n')[0]; // Take the first URL (video)
+    }
     if (stderr) logger.debug(`[yt-dlp stderr] ${stderr.trim()}`);
   } catch (err) {
     const msg = err.stderr || err.message || 'yt-dlp failed';
-    throw new Error(`yt-dlp download failed: ${msg}`);
+    throw new Error(`yt-dlp URL extraction failed: ${msg}`);
   }
 
-  if (!fs.existsSync(outputPath)) {
-    throw new Error('yt-dlp completed but output file not found.');
+  if (!streamUrl || !streamUrl.startsWith('http')) {
+    throw new Error('yt-dlp completed but no valid stream URL was extracted.');
   }
 
-  const stat = fs.statSync(outputPath);
-  return { filePath: outputPath, sizeBytes: stat.size };
+  // We don't have local sizeBytes since it's a stream
+  return { filePath: streamUrl, sizeBytes: 0 };
 }
 
 // ── Direct / cloud HTTP downloader ───────────────────────────────────────────
-async function downloadDirect(url, outputPath) {
-  logger.info(`[Downloader] Direct HTTP download: ${url}`);
-
-  const response = await axios.get(url, {
-    responseType: 'stream',
-    timeout: 10 * 60 * 1000, // 10 minutes
-    maxRedirects: 10,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; VideoAIPlatform/1.0)',
-    },
-  });
-
-  const contentType = response.headers['content-type'] || '';
-  const isVideo = /video|octet-stream/.test(contentType);
-  if (!isVideo) {
-    logger.warn(`[Downloader] Unexpected content-type: ${contentType}`);
-  }
-
-  // Determine extension from content-disposition or URL
-  let ext = '.mp4';
-  const disposition = response.headers['content-disposition'] || '';
-  const dispMatch = disposition.match(/filename[^;=\n]*=["']?([^"';\n]+)/i);
-  if (dispMatch) {
-    ext = path.extname(dispMatch[1]) || ext;
-  } else {
-    const urlExt = path.extname(url.split('?')[0]);
-    if (urlExt) ext = urlExt;
-  }
-
-  // If outputPath has no extension, append one
-  const finalPath = outputPath.endsWith('.mp4') || path.extname(outputPath)
-    ? outputPath
-    : outputPath + ext;
-
-  await new Promise((resolve, reject) => {
-    const writer = fs.createWriteStream(finalPath);
-    response.data.pipe(writer);
-    writer.on('finish', resolve);
-    writer.on('error', reject);
-    response.data.on('error', reject);
-  });
-
-  const stat = fs.statSync(finalPath);
-  return { filePath: finalPath, sizeBytes: stat.size };
+async function downloadDirect(url) {
+  logger.info(`[Downloader] Resolving direct HTTP stream: ${url}`);
+  
+  // No need to actually download the file to disk!
+  // OpenCV/FFmpeg can stream this directly.
+  return { filePath: url, sizeBytes: 0 };
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -188,14 +148,15 @@ async function downloadVideo(url) {
 
   let result;
   if (usesYtDlp) {
-    result = await downloadWithYtDlp(url, outputPath);
+    result = await downloadWithYtDlp(url);
   } else {
     const normalizedUrl = normalizeUrl(url, sourceType);
-    result = await downloadDirect(normalizedUrl, outputPath);
+    result = await downloadDirect(normalizedUrl);
   }
 
-  const filename = path.basename(result.filePath);
-  logger.info(`[Downloader] Download complete: ${result.filePath} (${result.sizeBytes} bytes)`);
+  // If it's an HTTP stream, we don't have a strict filename, just use "stream.mp4"
+  const filename = result.filePath.startsWith('http') ? 'stream.mp4' : path.basename(result.filePath);
+  logger.info(`[Downloader] Stream URL resolved successfully!`);
 
   return {
     filePath: result.filePath,

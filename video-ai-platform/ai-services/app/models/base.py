@@ -36,6 +36,8 @@ class BaseModel(ABC):
         """
         self._device = device
         self._loaded: bool = False
+        self.available: bool = True
+        self.unavailable_reason: str = ""
 
     # ── Mandatory interface ────────────────────────────────────────────────────
 
@@ -80,6 +82,10 @@ class BaseModel(ABC):
     @property
     def is_loaded(self) -> bool:
         return self._loaded
+
+    @property
+    def is_available(self) -> bool:
+        return self.available
 
     @property
     def device(self) -> str:

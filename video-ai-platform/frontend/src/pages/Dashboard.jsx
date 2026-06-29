@@ -6,7 +6,7 @@ import LogsPanel from '../components/LogsPanel.jsx';
 import OutputPanel from '../components/OutputPanel.jsx';
 import VideoInputPanel from '../components/VideoInputPanel.jsx';
 import { startProcessing, uploadVideoFile, downloadVideoUrl, getJobStatus, getJobResult } from '../services/api.js';
-import { subscribeToJob } from '../services/socket.js';
+import { subscribeToJob, isSocketConnected, cancelJobEvent } from '../services/socket.js';
 
 const INITIAL_FEATURES = { stabilization: false, heavyRainRemoval: false, videoVisibility: false, distanceEstimation: false };
 
@@ -28,14 +28,36 @@ function Dashboard() {
   const pollIntervalRef = useRef(null);
   const unsubscribeRef = useRef(null);
 
-  // Cleanup on unmount
+  const jobIdRef = useRef(null);
+  const statusRef = useRef('idle');
+
+  // Cleanup on unmount or tab close
   useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (
+        jobIdRef.current &&
+        (statusRef.current === 'processing' || statusRef.current === 'accepted')
+      ) {
+        cancelJobEvent(jobIdRef.current);
+      }
+    };
+    
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
     return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
       }
       if (unsubscribeRef.current) {
         unsubscribeRef.current();
+      }
+      if (
+        jobIdRef.current &&
+        (statusRef.current === 'processing' || statusRef.current === 'accepted')
+      ) {
+        cancelJobEvent(jobIdRef.current);
       }
     };
   }, []);
@@ -63,6 +85,11 @@ function Dashboard() {
     setLogs((prev) => [...prev, createLog(message, level)]);
   }, []);
 
+  useEffect(() => {
+    jobIdRef.current = jobId;
+    statusRef.current = status;
+  }, [jobId, status]);
+
   const validate = useCallback(() => {
     let valid = true;
 
@@ -85,6 +112,9 @@ function Dashboard() {
   }, [inputSource, features]);
 
   const resetState = useCallback(() => {
+    if (jobId && (status === 'processing' || status === 'accepted')) {
+      cancelJobEvent(jobId);
+    }
     setProgress(0);
     setCurrentStage('');
     setLogs([]);
@@ -93,7 +123,7 @@ function Dashboard() {
     setApiError('');
     setStatus('idle');
     setJobId(null);
-  }, []);
+  }, [jobId, status]);
 
   const handleSubmit = useCallback(async (e) => {
     e.preventDefault();
@@ -154,8 +184,8 @@ function Dashboard() {
               if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
               pollIntervalRef.current = null;
               setStatus('failed');
-              setApiError('Processing failed.');
-              appendLog(`Error: Processing failed on backend.`, 'error');
+              setApiError(res.error || 'Processing failed.');
+              appendLog(`Error: ${res.error || 'Processing failed on backend.'}`, 'error');
               setProcessing(false);
               if (unsubscribeRef.current) unsubscribeRef.current();
             } else {
@@ -214,6 +244,9 @@ function Dashboard() {
           stopPolling();
           if (unsubscribeRef.current) unsubscribeRef.current();
         },
+        onConnectError: () => {
+          startPolling();
+        },
         onDisconnect: () => {
           startPolling();
         },
@@ -222,6 +255,14 @@ function Dashboard() {
         }
       });
       unsubscribeRef.current = unsubscribe;
+
+      // ── Step 3: Check initial socket health ──────────────────────────────
+      // If the socket isn't connected immediately upon job submission, start polling instantly.
+      // If it connects later, onConnect will stop the polling.
+      if (!isSocketConnected()) {
+        appendLog('Socket not connected at start, engaging HTTP polling…', 'system');
+        startPolling();
+      }
 
     } catch (err) {
       setStatus('failed');
@@ -239,10 +280,6 @@ function Dashboard() {
     if (unsubscribeRef.current) {
       unsubscribeRef.current();
       unsubscribeRef.current = null;
-    }
-    if (window.__currentJobPoll) {
-      clearInterval(window.__currentJobPoll);
-      window.__currentJobPoll = null;
     }
     resetState();
     setInputSource(null);

@@ -97,6 +97,11 @@ class PipelineManager:
         """
         self._models = models
 
+    def is_cancelled(self, video_path: str) -> bool:
+        """Check if the given video_path exists in the global cancellation registry."""
+        from app.api.process import CANCELLATION_REGISTRY
+        return video_path in CANCELLATION_REGISTRY
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def run(self, request: ProcessingRequest) -> ProcessingResult:
@@ -141,13 +146,25 @@ class PipelineManager:
                 total_frames = reader.frame_count
 
                 # Initialize progress
-                from app.api.process import GLOBAL_PROGRESS
+                from app.api.process import GLOBAL_PROGRESS, CANCELLATION_REGISTRY
                 GLOBAL_PROGRESS[request.video_path] = 10
+                CANCELLATION_REGISTRY.discard(request.video_path)
 
                 if is_stabilizing:
                     log(f"Stage: {stabilizer.name} — starting Pass 1 (Optical Flow)…")
                     stage_start = time.perf_counter()
-                    stabilizer.compute_corrections(reader)
+                    if hasattr(stabilizer, "compute_corrections"):
+                        import inspect
+                        sig = inspect.signature(stabilizer.compute_corrections)
+                        if "cancel_callback" in sig.parameters:
+                            stabilizer.compute_corrections(
+                                reader,
+                                cancel_callback=lambda: self.is_cancelled(request.video_path)
+                            )
+                        else:
+                            stabilizer.compute_corrections(reader)
+                    else:
+                        stabilizer.compute_corrections(reader)
                     stage_elapsed = time.perf_counter() - stage_start
                     log(f"Stage {stabilizer.name} Pass 1 complete | {format_duration(stage_elapsed)}")
                     log_memory_usage("after_stabilization_pass1")
@@ -164,7 +181,9 @@ class PipelineManager:
                 log(f"Writing output video: {output_path}")
 
                 # We need to peek at the first frame to determine final cropped resolution if stabilization is active
-                reader.seek(0)
+                # Reopen the reader instead of seeking to frame 0 (HTTP streaming safe)
+                reader.release()
+                reader.open()
                 frame_generator = reader.frames()
                 
                 try:
@@ -199,6 +218,9 @@ class PipelineManager:
 
                     # Continue streaming the remaining frames from the generator
                     for idx, frame in frame_generator:
+                        if self.is_cancelled(request.video_path):
+                            raise InterruptedError("Processing cancelled by user.")
+
                         if max(frame.shape[1], frame.shape[0]) > settings.max_resolution:
                             scale = settings.max_resolution / max(frame.shape[1], frame.shape[0])
                             new_w = int(frame.shape[1] * scale)
@@ -247,6 +269,17 @@ class PipelineManager:
             elapsed = time.perf_counter() - start_time
             msg = f"Validation or I/O error: {exc}"
             log(msg, level="error")
+            return ProcessingResult(
+                status="failed",
+                execution_time=format_duration(elapsed),
+                logs=logs,
+                error=msg,
+            )
+
+        except InterruptedError as exc:
+            elapsed = time.perf_counter() - start_time
+            msg = str(exc)
+            log(msg, level="warning")
             return ProcessingResult(
                 status="failed",
                 execution_time=format_duration(elapsed),
@@ -342,6 +375,9 @@ class PipelineManager:
             if not model._loaded:
                 log(f"Lazy loading model for {feature_name}...")
                 model.load_model()
+
+            if not model.is_available:
+                raise RuntimeError(model.unavailable_reason)
 
             active.append((feature_name, model))
 
