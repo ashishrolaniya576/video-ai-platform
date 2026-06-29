@@ -192,7 +192,10 @@ class HeavyRainRemovalModel(BaseModel):
         except Exception as e:
             raise RuntimeError(f"Failed to load checkpoint for {self.name}: {e}")
 
-        network = network.to(torch_device).eval()
+        if self._device == "cuda":
+            network = network.to(torch_device, memory_format=torch.channels_last).eval()
+        else:
+            network = network.to(torch_device).eval()
 
         # We use manual numpy conversion in process_frame instead of this transform for speed.
         self._transform = None
@@ -213,7 +216,7 @@ class HeavyRainRemovalModel(BaseModel):
         """
         self._assert_loaded()
         
-        if frame_idx % 50 == 0:
+        if frame_idx % 100 == 0:
             logger.info("%s: Processing frame %d", self.name, frame_idx)
 
         # Convert BGR to RGB
@@ -235,8 +238,8 @@ class HeavyRainRemovalModel(BaseModel):
 
         # Transform to tensor (manual for speed to avoid transforms.ToTensor overhead)
         input_tensor = torch.from_numpy(img_resized).to(self._device, non_blocking=True)
-        # Preprocessing: convert to float, normalize to [-1, 1] using in-place operations
-        input_tensor = input_tensor.permute(2, 0, 1).unsqueeze(0).float().mul_(2.0 / 255.0).sub_(1.0)
+        # Preprocessing: permute, reshape to NCHW but contiguous in channels_last, convert to float, normalize to [-1, 1] using in-place operations
+        input_tensor = input_tensor.permute(2, 0, 1).unsqueeze(0).contiguous(memory_format=torch.channels_last).float().mul_(2.0 / 255.0).sub_(1.0)
 
         # Inference
         with torch.inference_mode(), torch.autocast(device_type=self._device, enabled=self._device=="cuda"):
@@ -246,6 +249,7 @@ class HeavyRainRemovalModel(BaseModel):
             clean_out.add_(0.5).clamp_(0.0, 1.0).mul_(255.0)
         
         # Convert to numpy array [H, W, C]
+        # Because clean_out is channels_last, squeezing and permuting back yields a contiguous CPU array, providing a zero-copy transfer.
         out_rgb = clean_out.squeeze(0).permute(1, 2, 0).to(torch.uint8).cpu().numpy()
 
         # Resize back to original dimensions if we changed them

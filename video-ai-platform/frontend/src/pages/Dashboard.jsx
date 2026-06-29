@@ -115,6 +115,14 @@ function Dashboard() {
     if (jobId && (status === 'processing' || status === 'accepted')) {
       cancelJobEvent(jobId);
     }
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
+      unsubscribeRef.current = null;
+    }
     setProgress(0);
     setCurrentStage('');
     setLogs([]);

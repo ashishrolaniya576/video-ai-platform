@@ -67,7 +67,7 @@ video-ai-platform/
 1. **Video Stabilization (RAFT):** Optical flow model that removes camera shake and unwanted motion.
 2. **Heavy Rain Removal:** Deep neural network designed to remove rain streaks from video frames.
 3. **Video Visibility Enhancement (PromptIR):** Restores degraded frames and enhances contrast and sharpness.
-4. **Distance Estimation:** Custom FasterRCNN model that detects objects and estimates their distance in meters natively overlaid on the output frames.
+4. **Distance Estimation:** Custom FasterRCNN model that detects objects and estimates their distance in meters natively overlaid on the output frames. *(Model weights are automatically downloaded from Hugging Face on first use).*
 
 ---
 

@@ -94,9 +94,43 @@ class DistanceEstimationModel(BaseModel):
         weights_path = Path(settings.distance_weights_path).resolve()
         yaml_path = Path(settings.distance_yaml_path).resolve()
         
+        # Phase 8 / Auto-download: If the checkpoint is missing, fetch it from Hugging Face
         if not weights_path.exists():
+            logger.info("Distance Estimation checkpoint not found locally. Downloading from Hugging Face...")
+            try:
+                import shutil
+                from huggingface_hub import hf_hub_download
+                
+                cached_path = hf_hub_download(
+                    repo_id="ashish576/video-ai-platform-models",
+                    filename="distance_estimation/best.pth"
+                )
+                
+                weights_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(cached_path, weights_path)
+                logger.info(f"Successfully downloaded and saved Distance Estimation checkpoint to {weights_path}")
+                
+            except ImportError:
+                self.available = False
+                self.unavailable_reason = "huggingface_hub package is required to download the model but is not installed."
+                logger.warning(self.unavailable_reason)
+                return
+            except Exception as exc:
+                self.available = False
+                self.unavailable_reason = (
+                    "Distance Estimation checkpoint could not be loaded.\n"
+                    f"Expected: {weights_path}\n"
+                    f"Actual: The local file is missing and the Hugging Face download failed.\n"
+                    f"Error: {exc}\n"
+                    "Suggested action: Check your internet connection or download manually."
+                )
+                logger.warning(self.unavailable_reason)
+                return
+
+        # Check readability
+        if not os.access(weights_path, os.R_OK):
             self.available = False
-            self.unavailable_reason = f"Distance Estimation model weights were not found. Expected location: distanceEstimation_d2/best.pth. The repository does not include the required weights."
+            self.unavailable_reason = f"Distance Estimation checkpoint could not be loaded.\nExpected: {weights_path}\nActual: Permission denied (unreadable file)."
             logger.warning(self.unavailable_reason)
             return
             
@@ -113,18 +147,42 @@ class DistanceEstimationModel(BaseModel):
             self.int_cls = {v: k for k, v in cls_int.items()}
 
             self._model = estModel(num_classes=num_classes + 1)
+        except Exception as exc:
+            self.available = False
+            self.unavailable_reason = f"Distance Estimation initialization failed.\nActual: Could not parse YAML or construct model architecture: {exc}"
+            logger.warning(self.unavailable_reason)
+            return
+
+        # Phase 7: Verify the checkpoint (Loadability)
+        try:
             state = torch.load(str(weights_path), map_location=self._device)
+        except Exception as exc:
+            self.available = False
+            self.unavailable_reason = (
+                "Distance Estimation checkpoint could not be loaded.\n"
+                f"Expected: {weights_path}\n"
+                f"Actual: torch.load() failed. The file may be corrupted or incompatible: {exc}"
+            )
+            logger.warning(self.unavailable_reason)
+            return
+
+        # Phase 7: Verify the checkpoint (Architecture Compatibility)
+        try:
             self._model.load_state_dict(state)
             self._model.to(self._device)
             self._model.eval()
-
         except Exception as exc:
             self.available = False
-            self.unavailable_reason = f"Failed to load Distance Estimation weights from '{weights_path}': {exc}"
+            self.unavailable_reason = (
+                "Distance Estimation checkpoint could not be loaded.\n"
+                f"Expected: {weights_path}\n"
+                f"Actual: Architecture mismatch. The state_dict keys do not match the estModel initialization: {exc}"
+            )
             logger.warning(self.unavailable_reason)
             return
 
         self._loaded = True
+        self.available = True
         logger.info("Distance Estimation Model Loaded")
         logger.info("%s: Model loaded successfully on %s.", self.name, self._device.upper())
 
