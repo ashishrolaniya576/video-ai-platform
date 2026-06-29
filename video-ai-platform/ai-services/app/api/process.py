@@ -98,12 +98,12 @@ async def process_video(
 ) -> ProcessResponseSchema:
     logger.info(
         "POST /process — videoPath=%s stabilization=%s heavyRainRemoval=%s "
-        "videoVisibility=%s objectDetection=%s",
+        "videoVisibility=%s distanceEstimation=%s",
         body.videoPath,
         body.stabilization,
         body.heavyRainRemoval,
         body.videoVisibility,
-        body.objectDetection,
+        body.distanceEstimation,
     )
 
     processing_request = ProcessingRequest(
@@ -111,7 +111,7 @@ async def process_video(
         stabilization=body.stabilization,
         heavy_rain_removal=body.heavyRainRemoval,
         video_visibility=body.videoVisibility,
-        object_detection=body.objectDetection,
+        distance_estimation=body.distanceEstimation,
     )
 
     result: ProcessingResult = pipeline.run(processing_request)

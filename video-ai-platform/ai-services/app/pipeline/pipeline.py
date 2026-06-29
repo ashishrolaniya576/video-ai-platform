@@ -58,7 +58,7 @@ class ProcessingRequest:
             self.stabilization
             or self.heavy_rain_removal
             or self.video_visibility
-            or self.object_detection
+            or self.distance_estimation
         )
 
 

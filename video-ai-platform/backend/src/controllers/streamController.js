@@ -38,7 +38,7 @@ async function startProcessing(req, res, next) {
       stabilization,
       heavyRainRemoval,
       videoVisibility,
-      objectDetection,
+      distanceEstimation,
     } = req.body;
 
     const videoSource = (tempPath || videoUrl || '').trim();
@@ -63,7 +63,7 @@ async function startProcessing(req, res, next) {
       });
     }
 
-    const hasFeature = stabilization || heavyRainRemoval || videoVisibility || objectDetection;
+    const hasFeature = stabilization || heavyRainRemoval || videoVisibility || distanceEstimation;
     if (!hasFeature) {
       return res.status(400).json({ error: 'At least one processing feature must be selected.' });
     }
@@ -75,7 +75,7 @@ async function startProcessing(req, res, next) {
       stabilization: Boolean(stabilization),
       heavyRainRemoval: Boolean(heavyRainRemoval),
       videoVisibility: Boolean(videoVisibility),
-      objectDetection: Boolean(objectDetection),
+      distanceEstimation: Boolean(distanceEstimation),
     };
 
     createJob(jobId, videoSource, features, isTempFile);

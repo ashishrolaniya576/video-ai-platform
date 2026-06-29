@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path('/home/ashish/video_player/video-ai-platform/ai-services').resolve()))
 
 from app.models.heavy_rain_remove import HeavyRainRemovalModel
-from app.models.object_detection import ObjectDetectionModel
+from app.models.distance_estimation import DistanceEstimationModel
 from app.models.video_visibility import VideoVisibilityModel
 from app.models.stabilize import StabilizationModel
 from app.pipeline.pipeline import PipelineManager, ProcessingRequest
@@ -18,7 +18,7 @@ models = {
     'stabilization': StabilizationModel('cpu'),
     'heavy_rain_removal': HeavyRainRemovalModel('cpu'),
     'video_visibility': VideoVisibilityModel('cpu'),
-    'object_detection': ObjectDetectionModel('cpu')
+    'distance_estimation': DistanceEstimationModel('cpu')
 }
 
 # Load them
@@ -45,7 +45,7 @@ req = ProcessingRequest(
     stabilization=True,
     heavy_rain_removal=True,
     video_visibility=True,
-    object_detection=True
+    distance_estimation=True
 )
 result = pm.run(req)
 

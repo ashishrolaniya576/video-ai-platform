@@ -8,14 +8,14 @@ import VideoInputPanel from '../components/VideoInputPanel.jsx';
 import { startProcessing, uploadVideoFile, downloadVideoUrl, getJobStatus, getJobResult } from '../services/api.js';
 import { subscribeToJob } from '../services/socket.js';
 
-const INITIAL_FEATURES = { stabilization: false, heavyRainRemoval: false, videoVisibility: false, objectDetection: false };
+const INITIAL_FEATURES = { stabilization: false, heavyRainRemoval: false, videoVisibility: false, distanceEstimation: false };
 
 // Maps feature key → human-readable pipeline label (ordered for display)
 const PIPELINE_LABELS = [
   { key: 'stabilization',    label: 'Video Stabilization' },
   { key: 'heavyRainRemoval', label: 'Heavy Rain Removal' },
   { key: 'videoVisibility',  label: 'Video Visibility Enhancement' },
-  { key: 'objectDetection',  label: 'Object Detection' },
+  { key: 'distanceEstimation',  label: 'Distance Estimation' },
 ];
 
 function createLog(message, level = 'info') {

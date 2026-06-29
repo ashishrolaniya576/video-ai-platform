@@ -55,8 +55,8 @@ async function processJob(jobId, videoUrl, features, emitProgress) {
     if (features.videoVisibility) {
       logger.info(`[Job ${jobId}] Video Visibility Enhancement Started...`);
     }
-    if (features.objectDetection) {
-      logger.info(`[Job ${jobId}] Object Detection Started...`);
+    if (features.distanceEstimation) {
+      logger.info(`[Job ${jobId}] Distance Estimation Started...`);
     }
 
     logger.info(`[Job ${jobId}] Calling FastAPI at ${AI_SERVICE_URL}/process`);
@@ -89,8 +89,8 @@ async function processJob(jobId, videoUrl, features, emitProgress) {
     if (features.videoVisibility) {
       logger.info(`[Job ${jobId}] Video Visibility Enhancement Finished...`);
     }
-    if (features.objectDetection) {
-      logger.info(`[Job ${jobId}] Object Detection Finished...`);
+    if (features.distanceEstimation) {
+      logger.info(`[Job ${jobId}] Distance Estimation Finished...`);
     }
 
     // 4. Build output URL

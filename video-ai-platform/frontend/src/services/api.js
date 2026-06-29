@@ -24,14 +24,14 @@ api.interceptors.response.use(
 /**
  * Start processing using a pre-saved temp path (from upload or URL download).
  */
-export async function startProcessing({ tempPath, videoUrl, stabilization, heavyRainRemoval, videoVisibility, objectDetection }) {
+export async function startProcessing({ tempPath, videoUrl, stabilization, heavyRainRemoval, videoVisibility, distanceEstimation }) {
   const response = await api.post('/process', {
     tempPath,
     videoUrl,
     stabilization,
     heavyRainRemoval,
     videoVisibility,
-    objectDetection,
+    distanceEstimation,
   });
   return response.data;
 }

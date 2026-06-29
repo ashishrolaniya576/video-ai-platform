@@ -74,7 +74,7 @@ else
     fi
 
     # Check each model in the health JSON
-    for model in "stabilization" "heavy_rain_removal" "video_visibility" "object_detection"; do
+    for model in "stabilization" "heavy_rain_removal" "video_visibility" "distance_estimation"; do
         if echo "$AI_HEALTH" | grep -q "\"$model\":true"; then
             log_pass "AI Model loaded: $model"
         else
@@ -87,7 +87,7 @@ fi
 info "Verifying End-to-End Job Submission..."
 # Submit a tiny test request (we won't wait for completion here to avoid hanging the test, just verify acceptance)
 JOB_RESP=$(curl -s -X POST -H "Content-Type: application/json" \
-    -d '{"videoUrl": "https://www.w3schools.com/html/mov_bbb.mp4", "objectDetection": true}' \
+    -d '{"videoUrl": "https://www.w3schools.com/html/mov_bbb.mp4", "distanceEstimation": true}' \
     http://localhost:5000/api/process || echo "FAILED")
 
 if echo "$JOB_RESP" | grep -q "jobId"; then
