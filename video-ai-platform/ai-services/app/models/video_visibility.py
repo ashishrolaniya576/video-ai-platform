@@ -89,7 +89,8 @@ class VideoVisibilityModel(BaseModel):
         self.clahe_clip = settings.promptir_clahe_clip
         
         # GPU Optimizations
-        self._gaussian_cache: Dict[int, torch.Tensor] = {}
+        self._gaussian_cache: dict[int, torch.Tensor] = {}
+        self._tile_buffers: dict[tuple, tuple[torch.Tensor, torch.Tensor]] = {}
         # Mini-batch size for tiles (increases GPU utilization drastically)
         self._batch_size = 4 
 
@@ -207,8 +208,15 @@ class VideoVisibilityModel(BaseModel):
         
         # Pre-allocate output and weight on the GPU directly
         img_tensor_gpu = img_tensor.to(device, non_blocking=True)
-        output = torch.zeros((c, h, w), dtype=torch.float32, device=device)
-        weight = torch.zeros((1, h, w), dtype=torch.float32, device=device)
+        shape_key = (c, h, w)
+        if shape_key not in self._tile_buffers:
+            self._tile_buffers[shape_key] = (
+                torch.zeros((c, h, w), dtype=torch.float32, device=device),
+                torch.zeros((1, h, w), dtype=torch.float32, device=device)
+            )
+        output, weight = self._tile_buffers[shape_key]
+        output.zero_()
+        weight.zero_()
         
         step = tile - overlap
         ys = sorted(set(max(0, y) for y in list(range(0, h - tile + 1, step)) + [h - tile]))
@@ -218,7 +226,7 @@ class VideoVisibilityModel(BaseModel):
             patch, _ = pad_to_multiple(img_tensor_gpu, 8)
             with torch.inference_mode(), torch.autocast(device_type=device.type, enabled=device.type=="cuda"):
                 out = self._model(patch.unsqueeze(0)).squeeze(0)
-            return out[:, :h, :w].clamp_(0, 1).cpu()
+            return out[:, :h, :w].clamp(0, 1).cpu()
             
         blend = self._get_gaussian_window(tile, device)
         
@@ -251,9 +259,9 @@ class VideoVisibilityModel(BaseModel):
                 output[:, y:y2, x:x2].add_(restored * w_patch)
                 weight[:, y:y2, x:x2].add_(w_patch)
                 
-        output.div_(weight.clamp_(min=1e-6))
+        output.div_(weight.clamp(min=1e-6))
         # Move final fully blended frame to CPU
-        return output.clamp_(0, 1).cpu()
+        return output.clamp(0, 1).cpu()
 
     def cleanup(self) -> None:
         """Release GPU memory and reset state."""
@@ -261,6 +269,7 @@ class VideoVisibilityModel(BaseModel):
             del self._model
             self._model = None
         self._gaussian_cache.clear()
+        self._tile_buffers.clear()
         if self._device == "cuda":
             try:
                 torch.cuda.empty_cache()

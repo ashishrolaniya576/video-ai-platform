@@ -208,6 +208,7 @@ class StabilizationModel(BaseModel):
         Reads the entire video stream frame-by-frame, ensuring O(1) RAM usage.
         """
         self._assert_loaded()
+        self._corrections.clear()
 
         logger.info("%s: Starting Pass 1 (Optical Flow & Trajectory)", self.name)
         t_start = time.perf_counter()

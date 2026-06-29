@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import FeaturePanel from '../components/FeaturePanel.jsx';
 import ProgressBar from '../components/ProgressBar.jsx';
 import StatusCard from '../components/StatusCard.jsx';
@@ -25,6 +25,20 @@ function createLog(message, level = 'info') {
 }
 
 function Dashboard() {
+  const pollIntervalRef = useRef(null);
+  const unsubscribeRef = useRef(null);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+      }
+    };
+  }, []);
   // ── Input source state ────────────────────────────────────────────────────
   // inputSource: null | { type: 'file', file: File } | { type: 'url', url: string }
   const [inputSource, setInputSource] = useState(null);
@@ -116,6 +130,54 @@ function Dashboard() {
       appendLog(`Job accepted. ID: ${newJobId}`, 'success');
       appendLog('Connecting to processing pipeline…', 'stage');
 
+      const startPolling = () => {
+        if (pollIntervalRef.current) return;
+        appendLog('Polling fallback enabled', 'system');
+        pollIntervalRef.current = setInterval(async () => {
+          try {
+            const res = await getJobStatus(newJobId);
+            if (res.status === 'completed') {
+              if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
+              const resultRes = await getJobResult(newJobId);
+              setStatus('completed');
+              setProgress(100);
+              setCurrentStage('Completed');
+              setOutputVideo(resultRes.outputVideo);
+              if (resultRes.detectionSummary && Object.keys(resultRes.detectionSummary).length > 0) {
+                setDetectionSummary(resultRes.detectionSummary);
+              }
+              appendLog('Processing completed successfully.', 'success');
+              setProcessing(false);
+              if (unsubscribeRef.current) unsubscribeRef.current();
+            } else if (res.status === 'failed') {
+              if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
+              setStatus('failed');
+              setApiError('Processing failed.');
+              appendLog(`Error: Processing failed on backend.`, 'error');
+              setProcessing(false);
+              if (unsubscribeRef.current) unsubscribeRef.current();
+            } else {
+              // Update progress only if it's strictly greater than what we already have
+              setProgress((prev) => Math.max(prev, res.progress || 0));
+              if (res.currentStage) setCurrentStage(res.currentStage);
+              if (res.status) setStatus(res.status);
+            }
+          } catch (pollErr) {
+            // Ignore polling errors
+          }
+        }, 2000);
+      };
+
+      const stopPolling = () => {
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
+          appendLog('Socket connected, stopped polling fallback', 'system');
+        }
+      };
+
       const unsubscribe = subscribeToJob(newJobId, {
         onSubscribed: ({ message }) => {
           appendLog(message, 'system');
@@ -123,7 +185,7 @@ function Dashboard() {
         },
         onProgress: (payload) => {
           if (payload.jobId !== newJobId) return;
-          setProgress(payload.progress);
+          setProgress((prev) => Math.max(prev, payload.progress));
           setCurrentStage(payload.currentStage);
           setStatus(payload.status === 'completed' ? 'completed' : 'processing');
           const level = payload.currentStage.toLowerCase().includes('running') ? 'stage' : 'info';
@@ -140,7 +202,8 @@ function Dashboard() {
           }
           appendLog('Processing completed successfully.', 'success');
           setProcessing(false);
-          unsubscribe();
+          stopPolling();
+          if (unsubscribeRef.current) unsubscribeRef.current();
         },
         onFailed: (payload) => {
           if (payload.jobId !== newJobId) return;
@@ -148,48 +211,17 @@ function Dashboard() {
           setApiError(payload.error || 'An unknown error occurred.');
           appendLog(`Error: ${payload.error || 'Processing failed.'}`, 'error');
           setProcessing(false);
-          unsubscribe();
+          stopPolling();
+          if (unsubscribeRef.current) unsubscribeRef.current();
         },
-      });
-
-      // Fallback Polling Mechanism
-      // Safeguard in case WebSockets fail to connect, drop, or miss events due to race conditions.
-      let pollInterval = setInterval(async () => {
-        try {
-          const res = await getJobStatus(newJobId);
-          if (res.status === 'completed') {
-            clearInterval(pollInterval);
-            const resultRes = await getJobResult(newJobId);
-            setStatus('completed');
-            setProgress(100);
-            setCurrentStage('Completed');
-            setOutputVideo(resultRes.outputVideo);
-            if (resultRes.detectionSummary && Object.keys(resultRes.detectionSummary).length > 0) {
-              setDetectionSummary(resultRes.detectionSummary);
-            }
-            appendLog('Processing completed successfully.', 'success');
-            setProcessing(false);
-            unsubscribe();
-          } else if (res.status === 'failed') {
-            clearInterval(pollInterval);
-            setStatus('failed');
-            setApiError('Processing failed.');
-            appendLog(`Error: Processing failed on backend.`, 'error');
-            setProcessing(false);
-            unsubscribe();
-          } else {
-            // Update progress only if it's strictly greater than what we already have
-            setProgress((prev) => Math.max(prev, res.progress || 0));
-            if (res.currentStage) setCurrentStage(res.currentStage);
-            if (res.status) setStatus(res.status);
-          }
-        } catch (pollErr) {
-          // Ignore polling errors to prevent interrupting the flow if a single request fails
+        onDisconnect: () => {
+          startPolling();
+        },
+        onConnect: () => {
+          stopPolling();
         }
-      }, 2000);
-
-      // Clean up polling if the user resets
-      window.__currentJobPoll = pollInterval;
+      });
+      unsubscribeRef.current = unsubscribe;
 
     } catch (err) {
       setStatus('failed');
@@ -200,6 +232,14 @@ function Dashboard() {
   }, [inputSource, features, validate, resetState, appendLog]);
 
   const handleReset = useCallback(() => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
+      unsubscribeRef.current = null;
+    }
     if (window.__currentJobPoll) {
       clearInterval(window.__currentJobPoll);
       window.__currentJobPoll = null;

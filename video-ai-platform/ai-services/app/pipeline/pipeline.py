@@ -110,6 +110,7 @@ class PipelineManager:
         start_time = time.perf_counter()
         logs: List[str] = []
         temp_paths: List[Path] = []
+        active_models: List[tuple] = []
         detection_summary: Optional[Dict[str, int]] = None
 
         def log(msg: str, level: str = "info") -> None:
@@ -214,8 +215,11 @@ class PipelineManager:
 
                 # ── Validate Final Output ─────────────────────────────────────────
                 from app.utils.video_utils import validate_output_video
-                log("Validating browser compatibility of output MP4...")
-                validate_output_video(output_path)
+                try:
+                    log("Validating browser compatibility of output MP4...")
+                    validate_output_video(output_path)
+                except Exception as e:
+                    log(f"Warning: Output validation failed: {e}", level="warning")
 
             elapsed = time.perf_counter() - start_time
             exec_time_str = format_duration(elapsed)
@@ -274,10 +278,8 @@ class PipelineManager:
             )
 
         finally:
-            # 5. Clean up temporary files and unload models to save memory
+            # 5. Clean up temporary files. Models remain loaded in GPU (Singletons)
             cleanup_paths(*temp_paths)
-            for _, model in active_models:
-                model.cleanup()
 
     # ── Private helpers ───────────────────────────────────────────────────────
 

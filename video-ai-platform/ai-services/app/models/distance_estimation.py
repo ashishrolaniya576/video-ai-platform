@@ -127,7 +127,10 @@ class DistanceEstimationModel(BaseModel):
         """
         self._assert_loaded()
 
-        if frame_idx % 25 == 0 or frame_idx == 0:
+        if frame_idx == 0:
+            self._last_detection_summary.clear()
+            logger.info("%s: Processing Frame %d", self.name, frame_idx)
+        elif frame_idx % 25 == 0:
             logger.info("%s: Processing Frame %d", self.name, frame_idx)
 
         conf_thresh: float = float(kwargs.get("conf", settings.distance_confidence_threshold))
@@ -153,10 +156,14 @@ class DistanceEstimationModel(BaseModel):
         with torch.inference_mode(), torch.autocast(device_type=self._device, enabled=self._device=="cuda"):
             output = self._model([inputs])[0]
 
-        boxes = output["boxes"].cpu()
-        labels = output["labels"].cpu()
-        scores = output["scores"].cpu()
-        distances = output["distances"].cpu()
+        boxes = output.get("boxes", torch.tensor([])).cpu()
+        labels = output.get("labels", torch.tensor([])).cpu()
+        scores = output.get("scores", torch.tensor([])).cpu()
+        distances = output.get("distances", torch.tensor([])).cpu()
+
+        # Handle empty detections
+        if len(scores) == 0:
+            return frame.copy()
 
         # Threshold filter
         mask = scores > conf_thresh
