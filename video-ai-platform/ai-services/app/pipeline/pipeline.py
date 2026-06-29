@@ -138,6 +138,11 @@ class PipelineManager:
             with VideoReader(request.video_path, buffer_size=settings.frame_buffer_size) as reader:
                 current_fps = reader.fps
                 out_h, out_w = reader.height, reader.width
+                total_frames = reader.frame_count
+
+                # Initialize progress
+                from app.api.process import GLOBAL_PROGRESS
+                GLOBAL_PROGRESS[request.video_path] = 10
 
                 if is_stabilizing:
                     log(f"Stage: {stabilizer.name} — starting Pass 1 (Optical Flow)…")
@@ -203,6 +208,10 @@ class PipelineManager:
                         for feature_name, model in active_models:
                             frame = model.process_frame(frame, idx)
                         writer.write(frame)
+
+                        if total_frames > 0 and idx % 10 == 0:
+                            pct = 10 + int((idx / total_frames) * 90)
+                            GLOBAL_PROGRESS[request.video_path] = min(100, pct)
 
                 # ── Extract Optional Results ──────────────────────────────────────
                 try:
@@ -280,6 +289,12 @@ class PipelineManager:
         finally:
             # 5. Clean up temporary files. Models remain loaded in GPU (Singletons)
             cleanup_paths(*temp_paths)
+            try:
+                from app.api.process import GLOBAL_PROGRESS
+                if request.video_path in GLOBAL_PROGRESS:
+                    del GLOBAL_PROGRESS[request.video_path]
+            except Exception:
+                pass
 
     # ── Private helpers ───────────────────────────────────────────────────────
 

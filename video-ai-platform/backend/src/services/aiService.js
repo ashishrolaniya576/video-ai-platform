@@ -70,9 +70,34 @@ async function processJob(jobId, videoUrl, features, emitProgress) {
       distanceEstimation: Boolean(features.distanceEstimation),
     };
 
-    const response = await axios.post(`${AI_SERVICE_URL}/process`, payload, {
-      timeout: 30 * 60 * 1000, // 30 minutes — large videos can take significant time
-    });
+    // Polling mechanism to fetch real-time frame progress from FastAPI
+    const progressInterval = setInterval(async () => {
+      try {
+        const res = await axios.get(`${AI_SERVICE_URL}/progress?video_path=${encodeURIComponent(videoUrl)}`);
+        if (res.data && res.data.progress) {
+          job.progress = res.data.progress;
+          job.currentStage = 'Processing on GPU';
+          emitProgress(jobId, {
+            jobId,
+            status: job.status,
+            progress: job.progress,
+            currentStage: job.currentStage,
+          });
+        }
+      } catch (e) {
+        // Ignore polling errors
+      }
+    }, 1000);
+
+    let response;
+    try {
+      response = await axios.post(`${AI_SERVICE_URL}/process`, payload, {
+        timeout: 30 * 60 * 1000, // 30 minutes — large videos can take significant time
+      });
+    } finally {
+      clearInterval(progressInterval);
+    }
+    
     const data = response.data;
 
     if (data.status !== 'completed') {

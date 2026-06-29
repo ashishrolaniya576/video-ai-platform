@@ -23,6 +23,16 @@ router = APIRouter()
 
 # ── Request / Response schemas ─────────────────────────────────────────────────
 
+GLOBAL_PROGRESS = {}
+
+@router.get(
+    "/progress",
+    status_code=status.HTTP_200_OK,
+    summary="Get progress of a running job",
+)
+async def get_progress(video_path: str):
+    return {"progress": GLOBAL_PROGRESS.get(video_path, 0)}
+
 class ProcessRequestSchema(BaseModel):
     """
     Incoming JSON body for POST /process.

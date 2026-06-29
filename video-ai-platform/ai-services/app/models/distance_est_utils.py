@@ -170,7 +170,7 @@ class estModel(vision.models.detection.FasterRCNN): ##
     def __init__(self, num_classes):
         #super().__init__()
         
-        backbone = vision.models.detection.backbone_utils.resnet_fpn_backbone('resnet50', pretrained=True)
+        backbone = vision.models.detection.backbone_utils.resnet_fpn_backbone('resnet50', weights=None)
         anchor_generator = vision.models.detection.rpn.AnchorGenerator(
             sizes=((32,), (64,), (128,), (256,), (512,)),
             aspect_ratios=((0.5, 1.0, 2.0),) * 5
