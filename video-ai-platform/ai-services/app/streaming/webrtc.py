@@ -81,7 +81,6 @@ class VideoTransformTrack(MediaStreamTrack):
             proc_elapsed = time.perf_counter() - proc_start
 
             if processed_img is None:
-                # If the pipeline failed or dropped the frame, return original
                 processed_img = img
 
             # Convert back to VideoFrame

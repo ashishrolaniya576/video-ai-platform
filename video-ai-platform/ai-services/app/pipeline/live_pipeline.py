@@ -164,6 +164,9 @@ class LiveSession:
         self.dropped_frames = 0
         self.input_frames = 0
         
+        # Caching for WebRTC Async Polling
+        self.last_processed_frame: Optional[np.ndarray] = None
+        
         self.current_stage = "Initialization"
         self.stage_start_time = time.time()
         
@@ -727,10 +730,18 @@ class LivePipelineManager:
             else:
                 processed_frame = item
                 
+            session.last_processed_frame = processed_frame
             return processed_frame
         except queue.Empty:
-            # If no frame is ready yet, we return None (track will handle it)
-            return None
+            # If no frame is ready yet, we return the LAST processed AI frame (Caching)
+            # This ensures WebRTC stays at 30 FPS while the AI overlay updates at ~10 FPS
+            if session.last_processed_frame is not None:
+                return session.last_processed_frame
+            
+            # Only during the first 200ms of startup (before first AI frame), return original
+            return frame
         except Exception as e:
             logger.error(f"Error fetching output frame for session {session_id}: {e}")
-            return None
+            if session.last_processed_frame is not None:
+                return session.last_processed_frame
+            return frame
