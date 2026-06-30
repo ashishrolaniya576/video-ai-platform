@@ -88,6 +88,33 @@ function Dashboard() {
   const [liveInputType, setLiveInputType] = useState('webcam'); // 'webcam' or 'url'
   const [liveUrl, setLiveUrl] = useState('');
 
+  // ── Backend Readiness State ───────────────────────────────────────────────
+  const [backendReady, setBackendReady] = useState(false);
+  const [backendStateInfo, setBackendStateInfo] = useState(null);
+
+  // Poll for backend readiness
+  useEffect(() => {
+    let interval;
+    const checkReady = async () => {
+      try {
+        const res = await axios.get('/ready');
+        setBackendReady(res.data.ready);
+        setBackendStateInfo(res.data);
+        if (res.data.ready && interval) {
+          clearInterval(interval);
+        }
+      } catch (err) {
+        if (err.response?.data) {
+          setBackendReady(false);
+          setBackendStateInfo(err.response.data);
+        }
+      }
+    };
+    checkReady();
+    interval = setInterval(checkReady, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   const appendLog = useCallback((message, level = 'info') => {
     setLogs((prev) => [...prev, createLog(message, level)]);
   }, []);
@@ -341,7 +368,7 @@ function Dashboard() {
     setProcessing(false);
   }, [resetState]);
 
-  const isSubmitDisabled = processing;
+  const isSubmitDisabled = processing || !backendReady;
 
   // Build ordered pipeline steps based on active toggles
   const activePipelineSteps = PIPELINE_LABELS.filter(({ key }) => features[key]);
@@ -524,6 +551,22 @@ function Dashboard() {
                 </div>
               )}
 
+              {/* ── Initialization Banner ── */}
+              {!backendReady && backendStateInfo && (
+                <div className="p-3 mb-4 rounded-xl bg-amber-950/30 border border-amber-800 flex items-center justify-between animate-pulse">
+                  <div className="flex items-center gap-3">
+                    <svg className="w-5 h-5 text-amber-500 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    <div>
+                      <p className="text-xs font-semibold text-amber-400">AI Service Initializing...</p>
+                      <p className="text-[10px] text-amber-500/70">{backendStateInfo.state} ({backendStateInfo.progress}%)</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* ── Action Buttons ── */}
               <div className="flex gap-3 pt-2">
                 <button
@@ -545,7 +588,7 @@ function Dashboard() {
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z" />
                 </svg>
-                {mode === 'live' ? 'Start Stream' : 'Process Video'}
+                {!backendReady ? 'Initializing...' : (mode === 'live' ? 'Start Stream' : 'Process Video')}
               </>
             )}
           </button>

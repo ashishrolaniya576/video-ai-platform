@@ -52,6 +52,38 @@ async def health_check(request: Request) -> HealthResponse:
     )
 
 
+class ReadyResponse(BaseModel):
+    ready: bool
+    state: str
+    progress: int
+    remaining_models: List[str]
+    message: Optional[str] = None
+
+
+@router.get(
+    "/ready",
+    response_model=ReadyResponse,
+    summary="Backend Readiness Check",
+    description="Returns true only when the AI backend has finished loading weights, CUDA, and model warmups.",
+)
+async def get_ready_status() -> ReadyResponse:
+    is_ready = model_manager.state == BackendState.RUNNING
+    
+    remaining = []
+    if not is_ready:
+        for name, model in model_manager.models.items():
+            if not getattr(model, '_loaded', False):
+                remaining.append(name)
+                
+    return ReadyResponse(
+        ready=is_ready,
+        state=model_manager.state.name,
+        progress=model_manager.startup_progress,
+        remaining_models=remaining,
+        message="Backend is ready." if is_ready else "AI service is still initializing."
+    )
+
+
 # Store startup time for uptime calculation
 START_TIME = time.time()
 

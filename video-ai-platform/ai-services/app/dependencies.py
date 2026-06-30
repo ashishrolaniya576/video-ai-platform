@@ -11,8 +11,9 @@ async def verify_backend_ready():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
-                "error": "Server Initializing",
+                "ready": False,
                 "state": model_manager.state.name,
-                "progress": model_manager.startup_progress
+                "progress": model_manager.startup_progress,
+                "message": "AI service is still initializing."
             }
         )
