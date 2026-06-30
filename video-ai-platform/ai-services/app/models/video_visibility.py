@@ -211,11 +211,35 @@ class VideoVisibilityModel(BaseModel):
         model.eval()
 
         if torch_device.type == "cuda" and self._enable_compile:
+            logger.info("%s: attempting torch.compile validation...", self.name)
             try:
-                model = torch.compile(model, mode="reduce-overhead", fullgraph=False)
-                logger.info("%s: enabled torch.compile for PromptIR inference.", self.name)
+                # Step 2: Attempt compilation
+                compiled_model = torch.compile(model, mode="reduce-overhead", fullgraph=False)
+                
+                # Step 3: Run ONE tiny validation inference using a dummy tensor
+                dummy_input = torch.zeros((1, 3, 64, 64), dtype=torch.float32, device=torch_device)
+                if self._enable_channels_last:
+                    dummy_input = dummy_input.to(memory_format=torch.channels_last)
+                
+                # Run validation pass using the class's AMP setting
+                if self._enable_amp:
+                    with torch.inference_mode(), torch.amp.autocast("cuda", dtype=torch.float16):
+                        _ = compiled_model(dummy_input)
+                else:
+                    with torch.inference_mode():
+                        _ = compiled_model(dummy_input)
+                
+                # Step 4: If validation succeeds, use compiled model
+                model = compiled_model
+                logger.info("%s: torch.compile validation successful.", self.name)
             except Exception as exc:
-                logger.warning("%s: torch.compile disabled for PromptIR due to %s", self.name, exc)
+                # Step 5: Immediately discard and fallback
+                logger.warning(
+                    "%s: torch.compile unsupported.\n"
+                    "Falling back to eager mode. Inference continues normally.\n"
+                    "Reason: %s",
+                    self.name, exc
+                )
 
         self._model = model
         self._loaded = True
