@@ -29,6 +29,8 @@ class SessionState(Enum):
 
 class SessionHealth(Enum):
     HEALTHY = "HEALTHY"
+    SLOW_INFERENCE = "SLOW_INFERENCE"
+    CONGESTED = "CONGESTED"
     WARNING = "WARNING"
     STALLED = "STALLED"
     FAILED = "FAILED"
@@ -105,6 +107,7 @@ class LiveSession:
         self.last_successful_inference = 0.0
         self.last_frame_timestamp = 0.0
         self.recovery_attempts = 0
+        self.last_heartbeat = time.time()
         
         self.request = request
         self.models = models
@@ -143,6 +146,11 @@ class LiveSession:
         except Exception as e:
             self.transition_state(SessionState.FAILED, f"Initialization failed: {e}")
             raise
+
+    def heartbeat(self, stage: str):
+        self.current_stage = stage
+        self.stage_start_time = time.time()
+        self.last_heartbeat = time.time()
 
     def transition_state(self, new_state: SessionState, reason: str = ""):
         """Enforce strict state transitions and log history."""
@@ -195,15 +203,16 @@ class LiveSession:
         qsize = self.frame_queue.qsize()
         now = time.time()
         
-        time_since_last_inference = now - self.last_successful_inference
-        if self.last_successful_inference == 0.0:
-            time_since_last_inference = 0.0 # Hasn't started yet
-            
-        if time_since_last_inference > settings.watchdog_stall_timeout_seconds and self.is_running:
+        time_since_heartbeat = now - self.last_heartbeat
+        
+        if time_since_heartbeat > settings.watchdog_stall_timeout_seconds and self.is_running:
             return SessionHealth.STALLED
             
+        if time_since_heartbeat > 5.0 and self.is_running:
+            return SessionHealth.SLOW_INFERENCE
+            
         if qsize >= settings.watchdog_queue_critical_threshold:
-            return SessionHealth.WARNING
+            return SessionHealth.CONGESTED
             
         return SessionHealth.HEALTHY
 
@@ -320,8 +329,7 @@ class LiveSession:
         while self.is_running:
             try:
                 # Wait for a frame
-                self.current_stage = "queue.get()"
-                self.stage_start_time = time.time()
+                self.heartbeat("queue.get()")
                 
                 logger.info(f"[Worker: {self.worker_uuid}] START queue.get() [QSize: {self.frame_queue.qsize()}]")
                 wait_start = time.perf_counter()
@@ -350,8 +358,7 @@ class LiveSession:
                 try:
                     for feature_name, model in self.active_models:
                         current_model_name = model.name
-                        self.current_stage = f"model.process_frame({current_model_name})"
-                        self.stage_start_time = time.time()
+                        self.heartbeat(f"model.process_frame({current_model_name})")
                         
                         logger.info(f"[Worker: {self.worker_uuid}] START inference [{current_model_name}] Frame {self.frame_idx}")
                         model_start_time = time.perf_counter()
@@ -406,8 +413,7 @@ class LiveSession:
                     self.profiling["inference"].pop(0)
                 
                 # Push to output (drop if full during normal operation, but shouldn't block)
-                self.current_stage = "queue.put()"
-                self.stage_start_time = time.time()
+                self.heartbeat("queue.put()")
                 
                 try:
                     logger.info(f"[Worker: {self.worker_uuid}] START queue.put() [QSize: {self.output_queue.qsize()}]")
@@ -551,35 +557,35 @@ class LivePipelineManager:
                     
                     if health == SessionHealth.STALLED:
                         logger.error(
-                            f"[Watchdog] Session {session_id} STALLED. Initiating Recovery Manager..."
+                            f"[Watchdog] DEADLOCK DETECTED! Session {session_id} STALLED. No heartbeat for {time.time() - session.last_heartbeat:.1f}s. Initiating Recovery..."
                         )
-                        success = session.recover()
-                        if success:
-                            self.total_recoveries += 1
-                        else:
-                            logger.critical(f"[Watchdog] Session {session_id} recovery failed. Terminating.")
-                            
-                    elif health == SessionHealth.WARNING:
-                        stage_duration = time.time() - session.stage_start_time
-                        logger.warning(
-                            f"[Watchdog] Session: {session.session_uuid} | Worker: {session.worker_uuid} | "
-                            f"State: {session.current_state.name} | Health: {health.name} | "
-                            f"QSize: {session.frame_queue.qsize()} | "
-                            f"LastInf: {time.time() - session.last_successful_inference:.1f}s ago | "
-                            f"Processed: {session.processed_frames} | "
-                            f"Current Stage: {session.current_stage} (Running for {stage_duration:.1f}s)"
-                        )
-                        
-                        # DEADLOCK DETECTION (PHASE 11)
-                        if stage_duration > 5.0 and session.worker_thread and session.worker_thread.is_alive():
-                            logger.error(f"[Watchdog] DEADLOCK DETECTED! Worker {session.worker_uuid} blocked in {session.current_stage} for {stage_duration:.1f}s.")
+                        if session.worker_thread and session.worker_thread.is_alive():
                             import sys
                             import traceback
                             frame = sys._current_frames().get(session.worker_thread.ident)
                             if frame:
                                 tb = "".join(traceback.format_stack(frame))
                                 logger.error(f"=== THREAD STACK DUMP for Worker {session.worker_uuid} ===\n{tb}\n=======================================================")
-                        
+
+                        success = session.recover()
+                        if success:
+                            self.total_recoveries += 1
+                        else:
+                            logger.critical(f"[Watchdog] Session {session_id} recovery failed. Terminating.")
+                            
+                    elif health == SessionHealth.SLOW_INFERENCE:
+                        logger.warning(
+                            f"[Watchdog] Session {session_id} SLOW INFERENCE. Heartbeat delayed by {time.time() - session.last_heartbeat:.1f}s. Worker is likely blocked in a heavy GPU kernel ({session.current_stage})."
+                        )
+                    elif health in [SessionHealth.WARNING, SessionHealth.CONGESTED]:
+                        logger.warning(
+                            f"[Watchdog] Session: {session.session_uuid} | Worker: {session.worker_uuid} | "
+                            f"State: {session.current_state.name} | Health: {health.name} | "
+                            f"QSize: {session.frame_queue.qsize()} | "
+                            f"LastInf: {time.time() - session.last_successful_inference:.1f}s ago | "
+                            f"Processed: {session.processed_frames} | "
+                            f"Current Stage: {session.current_stage}"
+                        )
             except Exception as e:
                 logger.error(f"Watchdog internal error: {e}")
                 
@@ -622,14 +628,15 @@ class LivePipelineManager:
 
         session.input_frames += 1
 
-        # Put new frame in queue without blocking asyncio loop
+        # Latest Frame Mode (Adaptive Streaming)
+        # Empty the queue completely so the worker ALWAYS gets the absolute newest frame
         if session.frame_queue.full():
-            try:
-                # Drop oldest frame to keep latency low
-                session.frame_queue.get_nowait()
-                session.dropped_frames += 1
-            except queue.Empty:
-                pass
+            while not session.frame_queue.empty():
+                try:
+                    session.frame_queue.get_nowait()
+                    session.dropped_frames += 1
+                except queue.Empty:
+                    break
         
         try:
             session.frame_queue.put_nowait(frame)

@@ -216,8 +216,8 @@ class VideoVisibilityModel(BaseModel):
                 # Step 2: Attempt compilation
                 compiled_model = torch.compile(model, mode="reduce-overhead", fullgraph=False)
                 
-                # Step 3: Run ONE tiny validation inference using a dummy tensor
-                dummy_input = torch.zeros((1, 3, 64, 64), dtype=torch.float32, device=torch_device)
+                # Step 3: Run ONE validation inference using the exact shape expected during tiled inference
+                dummy_input = torch.zeros((self._tile_batch_size, 3, self.tile_size, self.tile_size), dtype=torch.float32, device=torch_device)
                 if self._enable_channels_last:
                     dummy_input = dummy_input.to(memory_format=torch.channels_last)
                 

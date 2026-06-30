@@ -108,7 +108,8 @@ export async function downloadVideoUrl(url) {
  * Start a URL-based live stream session.
  */
 export async function startUrlLiveStream({ url, stabilization, heavyRainRemoval, videoVisibility, distanceEstimation }) {
-  const response = await api.post('/live/start_url', {
+  // Use generic axios instead of the '/api' scoped instance to hit the FastAPI backend
+  const response = await axios.post('/live/start_url', {
     url,
     stabilization,
     heavyRainRemoval,
@@ -122,6 +123,6 @@ export async function startUrlLiveStream({ url, stabilization, heavyRainRemoval,
  * Stop a URL-based live stream session.
  */
 export async function stopUrlLiveStream(sessionId) {
-  const response = await api.post(`/live/stop_url/${sessionId}`);
+  const response = await axios.post(`/live/stop_url/${sessionId}`);
   return response.data;
 }
