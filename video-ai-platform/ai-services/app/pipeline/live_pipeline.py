@@ -459,9 +459,12 @@ class LiveSession:
                     logger.error(f"[Worker: {self.worker_uuid}] Inference loop crashed: {e}")
                     if self.is_running:
                         self.transition_state(SessionState.FAILED, f"Worker crashed: {e}")
-                        
-            finally:
-                self.is_running = False
+                
+                break  # Break out of the loop on any fatal unhandled exception
+                
+        # Execute once the loop has completely finished
+        self.is_running = False
+        logger.info(f"[Worker: {self.worker_uuid}] Inference loop exited.")
 
     def _metrics_loop(self):
         """Periodically send metrics to Node.js backend."""
