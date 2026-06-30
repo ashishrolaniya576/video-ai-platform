@@ -65,8 +65,23 @@ class URLStreamReader(BaseStreamReader):
         if self._cap:
             self._cap.release()
             
+        stream_url = self.url
+        if "youtube.com" in self.url or "youtu.be" in self.url:
+            try:
+                import yt_dlp
+                ydl_opts = {'format': 'best', 'quiet': True}
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(self.url, download=False)
+                    stream_url = info['url']
+                    logger.info(f"[URLStreamReader] Extracted YouTube direct stream URL.")
+            except ImportError:
+                logger.error("[URLStreamReader] yt-dlp is not installed. YouTube URLs will fail.")
+            except Exception as e:
+                logger.error(f"[URLStreamReader] Failed to extract YouTube stream: {e}")
+                return False
+
         # Use CAP_FFMPEG to enforce the FFmpeg backend, which is best for network streams
-        self._cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
+        self._cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
         self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 3) # Small buffer for low latency
         
         # Configure FFmpeg timeouts (if supported by the cv2 build, usually via env vars)

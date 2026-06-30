@@ -325,7 +325,11 @@ class LiveSession:
                 
                 logger.info(f"[Worker: {self.worker_uuid}] START queue.get() [QSize: {self.frame_queue.qsize()}]")
                 wait_start = time.perf_counter()
-                frame = self.frame_queue.get(timeout=0.5)
+                try:
+                    frame = self.frame_queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+
                 queue_wait_time = time.perf_counter() - wait_start
                 logger.info(f"[Worker: {self.worker_uuid}] END queue.get() | Elapsed: {queue_wait_time:.3f}s")
                 
