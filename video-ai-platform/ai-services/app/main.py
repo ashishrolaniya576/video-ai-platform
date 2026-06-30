@@ -151,7 +151,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router, prefix="", tags=["Health"])
     app.include_router(process_router, prefix="", tags=["Processing"])
     app.include_router(webrtc_router, prefix="", tags=["WebRTC"])
-    app.include_router(url_stream_router, prefix="/api", tags=["URLStream"])
+    app.include_router(url_stream_router, prefix="", tags=["URLStream"])
 
     return app
 
