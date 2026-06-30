@@ -8,7 +8,9 @@ from fastapi import APIRouter, Request, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.pipeline.live_pipeline import LivePipelineManager
+import numpy as np
+
+from app.pipeline.live_pipeline import LivePipelineManager, SessionState
 from app.streaming.stream_reader import URLStreamReader
 from app.utils.logger import get_logger
 
@@ -108,11 +110,30 @@ async def generate_mjpeg_stream(session_id: str, pipeline: LivePipelineManager):
         return
 
     try:
+        last_keepalive_time = 0.0
         while session.is_running:
             try:
                 # Use a non-blocking get to yield control back to the event loop
                 frame = session.output_queue.get_nowait()
+                last_keepalive_time = 0.0 # reset on actual frame
             except queue.Empty:
+                # If stream is initializing, yield a loading frame every 1 second to prevent browser timeout
+                if session.current_state in [SessionState.RESOLVING_STREAM, SessionState.CONNECTING]:
+                    now = asyncio.get_event_loop().time()
+                    if now - last_keepalive_time > 1.0:
+                        last_keepalive_time = now
+                        
+                        # Create a black frame
+                        frame = np.zeros((480, 854, 3), dtype=np.uint8)
+                        text = f"Status: {session.current_state.name}"
+                        font = cv2.FONT_HERSHEY_SIMPLEX
+                        cv2.putText(frame, text, (50, 240), font, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
+                        
+                        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
+                        if ret:
+                            yield (b'--frame\r\n'
+                                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                
                 await asyncio.sleep(0.01)
                 continue
 

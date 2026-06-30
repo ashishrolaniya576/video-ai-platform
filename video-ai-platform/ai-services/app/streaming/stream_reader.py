@@ -61,12 +61,14 @@ class URLStreamReader(BaseStreamReader):
             self._cap = None
         logger.info(f"[URLStreamReader] Stopped for session {self.session_id}")
 
-    def _open_stream(self) -> bool:
+    def _open_stream(self, session: Optional[LiveSession]) -> bool:
         if self._cap:
             self._cap.release()
             
         stream_url = self.url
         if "youtube.com" in self.url or "youtu.be" in self.url:
+            if session:
+                session.transition_state(SessionState.RESOLVING_STREAM, "Resolving YouTube direct URL via yt-dlp")
             try:
                 import yt_dlp
                 ydl_opts = {'format': 'best', 'quiet': True}
@@ -76,28 +78,44 @@ class URLStreamReader(BaseStreamReader):
                     logger.info(f"[URLStreamReader] Extracted YouTube direct stream URL.")
             except ImportError:
                 logger.error("[URLStreamReader] yt-dlp is not installed. YouTube URLs will fail.")
+                if session:
+                    session.transition_state(SessionState.FAILED, "yt-dlp not installed")
+                return False
             except Exception as e:
-                logger.error(f"[URLStreamReader] Failed to extract YouTube stream: {e}")
+                import traceback
+                tb = traceback.format_exc()
+                logger.error(f"[URLStreamReader] Failed to extract YouTube stream: {e}\n{tb}")
+                if session:
+                    session.transition_state(SessionState.FAILED, f"yt-dlp extraction failed: {e}")
                 return False
 
+        if session and session.current_state != SessionState.FAILED:
+            session.transition_state(SessionState.CONNECTING, "Opening stream via FFmpeg")
+            
         # Use CAP_FFMPEG to enforce the FFmpeg backend, which is best for network streams
         self._cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
         self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 3) # Small buffer for low latency
         
-        # Configure FFmpeg timeouts (if supported by the cv2 build, usually via env vars)
         return self._cap.isOpened()
 
     def _read_loop(self):
         retries = 0
         
         while not self._stop_event.is_set():
+            session: Optional[LiveSession] = self.pipeline_manager.sessions.get(self.session_id)
+            if not session:
+                logger.info(f"[URLStreamReader] Session {self.session_id} not found in manager. Stopping reader.")
+                break
+                
             if not self._cap or not self._cap.isOpened():
                 logger.info(f"[URLStreamReader] Attempting connection to {self.url} (Try {retries+1})")
-                success = self._open_stream()
+                success = self._open_stream(session)
                 if not success:
                     retries += 1
                     if retries >= self.max_retries:
                         logger.error(f"[URLStreamReader] Max retries reached for {self.url}. Terminating reader.")
+                        if session and session.current_state != SessionState.FAILED:
+                            session.transition_state(SessionState.FAILED, "Max retries reached during stream connection")
                         break
                     time.sleep(self.reconnect_delay)
                     continue
@@ -114,13 +132,6 @@ class URLStreamReader(BaseStreamReader):
                 time.sleep(self.reconnect_delay)
                 continue
 
-            # Push to the pipeline
-            session: Optional[LiveSession] = self.pipeline_manager.sessions.get(self.session_id)
-            if not session:
-                # Session was removed from manager, stop reader
-                logger.info(f"[URLStreamReader] Session {self.session_id} not found in manager. Stopping reader.")
-                break
-
             session.input_frames += 1
 
             if session.frame_queue.full():
@@ -133,6 +144,11 @@ class URLStreamReader(BaseStreamReader):
             
             try:
                 session.frame_queue.put(frame, timeout=0.1)
+                
+                # First frame successfully enqueued, transition to STREAMING
+                if session.current_state in [SessionState.RESOLVING_STREAM, SessionState.CONNECTING]:
+                    session.transition_state(SessionState.STREAMING, "First frame enqueued")
+                    
             except queue.Full:
                 pass
                 

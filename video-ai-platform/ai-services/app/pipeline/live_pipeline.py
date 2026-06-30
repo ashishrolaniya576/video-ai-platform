@@ -21,6 +21,8 @@ class SessionState(Enum):
     INITIALIZING = "INITIALIZING"
     LOADING_MODELS = "LOADING_MODELS"
     READY = "READY"
+    RESOLVING_STREAM = "RESOLVING_STREAM"
+    CONNECTING = "CONNECTING"
     STREAMING = "STREAMING"
     RECOVERING = "RECOVERING"
     FAILED = "FAILED"
@@ -49,7 +51,9 @@ GLOBAL_GPU_STATE = GpuHealthState.HEALTHY
 VALID_TRANSITIONS = {
     SessionState.INITIALIZING: [SessionState.LOADING_MODELS, SessionState.FAILED, SessionState.TERMINATING],
     SessionState.LOADING_MODELS: [SessionState.READY, SessionState.FAILED, SessionState.TERMINATING],
-    SessionState.READY: [SessionState.STREAMING, SessionState.FAILED, SessionState.TERMINATING],
+    SessionState.READY: [SessionState.RESOLVING_STREAM, SessionState.STREAMING, SessionState.FAILED, SessionState.TERMINATING],
+    SessionState.RESOLVING_STREAM: [SessionState.CONNECTING, SessionState.FAILED, SessionState.TERMINATING],
+    SessionState.CONNECTING: [SessionState.STREAMING, SessionState.FAILED, SessionState.TERMINATING],
     SessionState.STREAMING: [SessionState.RECOVERING, SessionState.FAILED, SessionState.TERMINATING],
     SessionState.RECOVERING: [SessionState.STREAMING, SessionState.FAILED, SessionState.TERMINATING],
     SessionState.FAILED: [SessionState.TERMINATING],
