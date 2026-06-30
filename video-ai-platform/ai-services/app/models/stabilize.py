@@ -40,6 +40,7 @@ from __future__ import annotations
 import inspect
 import sys
 import time
+import functools
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -167,6 +168,10 @@ class StabilizationModel(BaseModel):
 
         # ── Import RAFT modules ───────────────────────────────────────────────
         try:
+            # Silence meshgrid warning from inside RAFT
+            if not hasattr(torch.meshgrid, "__wrapped__"):
+                torch.meshgrid = functools.partial(torch.meshgrid, indexing="ij")
+                
             from raft import RAFT  # type: ignore[import]
             from utils.utils import InputPadder  # type: ignore[import]
         except ImportError as exc:
@@ -735,8 +740,8 @@ class StabilizationModel(BaseModel):
                 warped = apply_transform(frames[i], corrections[i], (width, height))
                 cropped = crop_frame(warped, CROP_RATIO)
                 out.write(cropped)
-                if (i+1) % 100 == 0:
-                    print(f'[warp] {i+1}/{len(frames)} frames written')
+                if (i + 1) % 100 == 0:
+                    logger.debug(f'[warp] {i+1}/{len(frames)} frames written')
 
         Args:
             frames:      All original BGR frames.

@@ -97,6 +97,7 @@ class VideoVisibilityModel(BaseModel):
         # GPU Optimizations
         self._gaussian_cache: dict[int, torch.Tensor] = {}
         self._tile_buffers: dict[tuple, tuple[torch.Tensor, torch.Tensor]] = {}
+        self._input_cpu_buffer: Optional[torch.Tensor] = None
         self._timing_stats: Dict[str, List[float]] = {"prepare": [], "infer": [], "postprocess": []}
 
     def _apply_model_channels_last(self, model: PromptIRWrapper) -> None:
@@ -136,7 +137,7 @@ class VideoVisibilityModel(BaseModel):
         """Run PromptIR on a rank-4 batch tensor with optional AMP and channels_last."""
         batch = self._to_channels_last_nchw(batch)
         if device.type == "cuda" and self._enable_amp:
-            with torch.inference_mode(), torch.autocast(device_type=device.type, dtype=torch.float16):
+            with torch.inference_mode(), torch.amp.autocast("cuda", dtype=torch.float16):
                 return self._model(batch)
         with torch.inference_mode():
             return self._model(batch)
@@ -223,11 +224,19 @@ class VideoVisibilityModel(BaseModel):
     def _prepare_input_tensor(self, frame: np.ndarray, device: torch.device | None = None) -> torch.Tensor:
         """Convert a BGR numpy frame into a compact CHW float tensor on the target device."""
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        tensor = torch.from_numpy(frame_rgb).permute(2, 0, 1).contiguous().to(torch.float32)
-        tensor.div_(255.0)
+        h, w = frame_rgb.shape[:2]
+        
+        if self._input_cpu_buffer is None or self._input_cpu_buffer.shape != (3, h, w):
+            pin_memory = (device is not None and device.type == "cuda")
+            self._input_cpu_buffer = torch.empty((3, h, w), dtype=torch.float32, device="cpu", pin_memory=pin_memory)
+            
+        rgb_view = torch.from_numpy(frame_rgb)
+        self._input_cpu_buffer.copy_(rgb_view.permute(2, 0, 1).contiguous().to(torch.float32))
+        self._input_cpu_buffer.div_(255.0)
+        
         if device is not None:
-            tensor = tensor.to(device=device, non_blocking=True)
-        return tensor
+            return self._input_cpu_buffer.to(device=device, non_blocking=True)
+        return self._input_cpu_buffer
 
     def _apply_gpu_postprocess(self, tensor: torch.Tensor) -> torch.Tensor:
         """Apply contrast and sharpening on GPU using PyTorch kernels."""
@@ -379,6 +388,7 @@ class VideoVisibilityModel(BaseModel):
             self._model = None
         self._gaussian_cache.clear()
         self._tile_buffers.clear()
+        self._input_cpu_buffer = None
         if self._device == "cuda":
             try:
                 torch.cuda.empty_cache()

@@ -10,6 +10,10 @@ import torch.nn.functional as F
 import torchvision as vision
 from torch.utils.data import Dataset
 
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 class load_Data(Dataset):
     def __init__(self, yaml_PATH, split, size=None):
         super().__init__()
@@ -23,7 +27,7 @@ class load_Data(Dataset):
         split_PATH = os.path.join(self.root_DIR, split, 'images')
         assert os.path.exists(split_PATH), f"Path doesn't exist: {split_PATH}"
         self.data = os.listdir(split_PATH)
-        print(f"{split} samples: {len(self.data)}")
+        logger.info(f"{split} samples: {len(self.data)}")
 
     def __len__(self):
         return len(self.data)

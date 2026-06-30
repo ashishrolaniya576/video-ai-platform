@@ -172,6 +172,9 @@ class HeavyRainRemovalModel(BaseModel):
             sys.path.insert(0, str(repo_path))
 
         try:
+            import torch.nn.init as init
+            if hasattr(init, "constant") and hasattr(init, "constant_"):
+                init.constant = init.constant_
             from model import DecompModel  # type: ignore
         except ImportError as exc:
             raise ImportError(
