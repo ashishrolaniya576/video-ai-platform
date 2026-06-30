@@ -297,6 +297,7 @@ class VideoVisibilityModel(BaseModel):
         if self._profile and frame_idx % 100 == 0:
             self._log_timing_summary(frame_idx)
 
+        
         return frame
 
     def _log_timing_summary(self, frame_idx: int) -> None:

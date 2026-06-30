@@ -48,6 +48,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from scipy.ndimage import uniform_filter1d
+from collections import deque
 
 from app.config.settings import settings
 from app.models.base import BaseModel
@@ -110,6 +111,11 @@ class StabilizationModel(BaseModel):
         self._grid_cache: dict[tuple[int, int], np.ndarray] = {}
         self._input_buffer: Optional[torch.Tensor] = None
         self._raft_supports_cached_fmap1: bool = False
+
+        # ── Streaming state (Per-Session) ──
+        # To support concurrent live streams without state corruption,
+        # we map session_id -> dict of streaming state buffers.
+        self._streaming_states: dict[str, dict] = {}
 
     # ═══════════════════════════════════════════════════════════════════════════
     # BaseModel interface
@@ -307,6 +313,109 @@ class StabilizationModel(BaseModel):
         warped = self._warp_frame(frame, M, (w_orig, h_orig))
         return self._crop_frame(warped)
 
+    def process_frame_streaming(
+        self,
+        frame: np.ndarray,
+        frame_idx: int,
+        session_id: str = "default",
+    ) -> np.ndarray:
+        """
+        Pass 2 (Streaming Mode): Incrementally compute flow and stabilize.
+        Maintains a sliding window of recent frames per session_id to avoid concurrency corruption.
+        Returns the stabilized frame from `self._smoothing_radius` steps ago.
+        Latency = self._smoothing_radius frames.
+        """
+        self._assert_loaded()
+        
+        # Ensure state dictionary exists for this specific session to make inference thread-safe
+        if session_id not in self._streaming_states:
+            self._streaming_states[session_id] = {
+                "frames": deque(),
+                "transforms": deque(),
+                "cached_t": None,
+                "padder": None,
+                "cached_fmap": None,
+                "cached_cnet": None,
+            }
+        
+        state = self._streaming_states[session_id]
+        
+        # 1. Resize & convert to tensor
+        h_orig, w_orig = frame.shape[:2]
+        s = cv2.resize(frame, (self._flow_w, self._flow_h), interpolation=cv2.INTER_AREA)
+        t2 = self._to_tensor(s)
+        
+        if state["padder"] is None:
+            state["padder"] = self._InputPadder(t2.shape)
+        
+        t2 = state["padder"].pad(t2)[0]
+        
+        # Buffer the original frame
+        state["frames"].append(frame)
+        
+        # 2. Compute Flow & Transform
+        if state["cached_t"] is None:
+            state["cached_t"] = t2
+            # For the first frame, we have no previous frame, so no transform.
+            # We just return it un-stabilized since we can't do anything yet.
+            return frame
+        
+        flow, state["cached_fmap"], state["cached_cnet"] = self._estimate_flow(
+            state["cached_t"], t2, state["padder"], h_orig, w_orig, 
+            state["cached_fmap"], state["cached_cnet"]
+        )
+        
+        M = self._flow_to_transform(flow)
+        state["transforms"].append(M)
+        state["cached_t"] = t2
+        
+        window_size = self._smoothing_radius * 2
+        
+        # If we haven't reached half the window size, we can't output a fully smoothed frame.
+        # Just return the oldest buffered frame un-stabilized to keep pipeline moving.
+        if len(state["transforms"]) < self._smoothing_radius:
+            return state["frames"].popleft()
+            
+        # Keep buffer sizes bounded
+        if len(state["transforms"]) > window_size:
+            state["transforms"].popleft()
+        
+        if len(state["frames"]) > window_size + 1:
+            state["frames"].popleft()
+            
+        # 3. Compute local trajectory
+        cumulative = self._get_cumulative(state["transforms"])
+        
+        # 4. Smooth local trajectory
+        smoothed = self._smooth_trajectory(cumulative)
+        
+        # 5. Get correction for the frame at index (len(cumulative) - smoothing_radius)
+        # Actually we want the correction for the oldest frame in the buffer that we are about to pop.
+        # Let's say we have N transforms, so N+1 frames.
+        # We want to output frame at index N - self._smoothing_radius.
+        target_idx = len(cumulative) - self._smoothing_radius - 1
+        if target_idx < 0:
+            target_idx = 0
+            
+        corrections = self._get_corrections(cumulative, smoothed)
+        correction_M = corrections[target_idx]
+        
+        # Pop the target frame
+        # If we have N transforms, we have buffered N+1 frames.
+        # We need to pop frame 0 (which corresponds to target_idx if we manage our buffer correctly).
+        # Actually, state["frames"] has length window_size + 1. 
+        # The frame we are stabilizing is always at the front of our bounded buffer.
+        out_frame = state["frames"].popleft()
+        
+        # 6. Apply correction
+        warped = self._warp_frame(out_frame, correction_M, (w_orig, h_orig))
+        return self._crop_frame(warped)
+        
+    def cleanup_session(self, session_id: str) -> None:
+        """Clear streaming state for a specific session to prevent memory leaks."""
+        if session_id in self._streaming_states:
+            del self._streaming_states[session_id]
+
     def cleanup(self) -> None:
         """Release GPU memory and reset state."""
         if self._raft is not None:
@@ -315,6 +424,10 @@ class StabilizationModel(BaseModel):
         self._InputPadder = None
         self._corrections = []
         self._grid_cache.clear()
+        
+        # Clear streaming state
+        self._streaming_states.clear()
+        
         if self._device == "cuda":
             try:
                 torch.cuda.empty_cache()

@@ -33,7 +33,7 @@ export function subscribeToJob(jobId, handlers) {
   const s = getSocket();
   s.emit('subscribe_job', jobId);
 
-  const { onProgress, onCompleted, onFailed, onSubscribed, onConnect, onDisconnect, onConnectError } = handlers;
+  const { onProgress, onCompleted, onFailed, onSubscribed, onConnect, onDisconnect, onConnectError, onMetrics } = handlers;
 
   if (onSubscribed) s.on('subscribed', onSubscribed);
   if (onProgress) s.on('progress_update', onProgress);
@@ -42,6 +42,7 @@ export function subscribeToJob(jobId, handlers) {
   if (onConnect) s.on('connect', onConnect);
   if (onDisconnect) s.on('disconnect', onDisconnect);
   if (onConnectError) s.on('connect_error', onConnectError);
+  if (onMetrics) s.on('live_metrics', onMetrics);
 
   return () => {
     s.emit('unsubscribe_job', jobId);
@@ -52,6 +53,7 @@ export function subscribeToJob(jobId, handlers) {
     if (onConnect) s.off('connect', onConnect);
     if (onDisconnect) s.off('disconnect', onDisconnect);
     if (onConnectError) s.off('connect_error', onConnectError);
+    if (onMetrics) s.off('live_metrics', onMetrics);
   };
 }
 

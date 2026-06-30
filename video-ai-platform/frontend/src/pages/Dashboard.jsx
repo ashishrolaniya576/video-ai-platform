@@ -5,6 +5,7 @@ import StatusCard from '../components/StatusCard.jsx';
 import LogsPanel from '../components/LogsPanel.jsx';
 import OutputPanel from '../components/OutputPanel.jsx';
 import VideoInputPanel from '../components/VideoInputPanel.jsx';
+import LiveStreamPanel from '../components/LiveStreamPanel.jsx';
 import { startProcessing, uploadVideoFile, downloadVideoUrl, getJobStatus, getJobResult } from '../services/api.js';
 import { subscribeToJob, isSocketConnected, cancelJobEvent } from '../services/socket.js';
 
@@ -66,6 +67,7 @@ function Dashboard() {
   const [inputSource, setInputSource] = useState(null);
 
   // ── Processing state ──────────────────────────────────────────────────────
+  const [mode, setMode] = useState('offline'); // 'offline' or 'live'
   const [features, setFeatures] = useState(INITIAL_FEATURES);
   const [processing, setProcessing] = useState(false);
   const [jobId, setJobId] = useState(null);
@@ -93,7 +95,7 @@ function Dashboard() {
   const validate = useCallback(() => {
     let valid = true;
 
-    if (!inputSource) {
+    if (mode === 'offline' && !inputSource) {
       setSourceError('Please select a video file or enter a video URL.');
       valid = false;
     } else {
@@ -140,6 +142,40 @@ function Dashboard() {
     resetState();
     setProcessing(true);
     setStatus('accepted');
+
+    if (mode === 'live') {
+      appendLog('Initializing Live Streaming Mode…', 'info');
+      try {
+        // We will signal to a component that handles WebRTC to start
+        // For now, let's just set the job ID to a live session ID
+        const liveJobId = `live_${Date.now()}`;
+        setJobId(liveJobId);
+        setStatus('processing');
+        setCurrentStage('Live Streaming');
+        appendLog('Live stream session initialized. Activating camera...', 'success');
+        
+        // Connect socket for metrics
+        unsubscribeRef.current = subscribeToJob(liveJobId, {
+          onSubscribed: () => appendLog('Subscribed to live metrics', 'system'),
+          onMetrics: (payload) => {
+            // Logs a concise message showing metrics
+            const msg = `Inf FPS: ${payload.inferenceFps} | In FPS: ${payload.inputFps} | Max Latency: ${payload.maxLatencyMs}ms | Queue: ${payload.inputQueue}/${payload.outputQueue} | Dropped: ${payload.droppedFrames} | GPU Mem: ${payload.gpuMemoryMb}MB`;
+            appendLog(msg, 'info');
+          },
+          onProgress: (payload) => {
+             // We can use a custom event or reuse progress_update for metrics
+          }
+        });
+        
+        // The actual WebRTC logic will be handled by a new component `LiveStreamOutput` that will mount when `status === 'processing' && mode === 'live'`
+      } catch (err) {
+        setStatus('failed');
+        setApiError(err.message);
+        appendLog(`Failed to start live stream: ${err.message}`, 'error');
+        setProcessing(false);
+      }
+      return;
+    }
 
     let tempPath = null;
 
@@ -319,13 +355,54 @@ function Dashboard() {
         <div className="xl:col-span-2 space-y-5">
           <form onSubmit={handleSubmit} noValidate id="processing-form">
             <div className="card-glow p-6 space-y-6">
+              
+              {/* ── Mode Selection ── */}
+              <div className="space-y-4">
+                <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Processing Mode</p>
+                <div className="flex rounded-xl border border-surface-600 bg-surface-800 p-1 gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setMode('offline')}
+                    disabled={isSubmitDisabled}
+                    className={`
+                      flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold
+                      transition-all duration-200
+                      ${mode === 'offline'
+                        ? 'bg-brand-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-surface-700'
+                      }
+                      ${isSubmitDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
+                    `}
+                  >
+                    Offline Video
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMode('live')}
+                    disabled={isSubmitDisabled}
+                    className={`
+                      flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold
+                      transition-all duration-200
+                      ${mode === 'live'
+                        ? 'bg-brand-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-surface-700'
+                      }
+                      ${isSubmitDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
+                    `}
+                  >
+                    Live Streaming
+                  </button>
+                </div>
+              </div>
 
               {/* ── Video Source Input ── */}
-              <VideoInputPanel
-                onSourceReady={setInputSource}
-                disabled={isSubmitDisabled}
-                externalError={sourceError}
-              />
+              {mode === 'offline' && (
+                <VideoInputPanel
+                  onSourceReady={setInputSource}
+                  disabled={isSubmitDisabled}
+                  externalError={sourceError}
+                />
+              )}
 
               {/* ── Feature Selection ── */}
               <FeaturePanel
@@ -407,13 +484,13 @@ function Dashboard() {
                     </>
                   ) : (
                     <>
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z" />
-                      </svg>
-                      Process Video
-                    </>
-                  )}
-                </button>
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z" />
+                </svg>
+                {mode === 'live' ? 'Start Stream' : 'Process Video'}
+              </>
+            )}
+          </button>
 
                 {(status !== 'idle') && (
                   <button
@@ -456,9 +533,19 @@ function Dashboard() {
               <svg className="w-4 h-4 text-accent-purple" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" />
               </svg>
-              Output
+              {mode === 'live' ? 'Live Stream' : 'Output'}
             </h2>
-            <OutputPanel outputVideo={outputVideo} detectionSummary={detectionSummary} />
+            {mode === 'offline' ? (
+              <OutputPanel outputVideo={outputVideo} detectionSummary={detectionSummary} />
+            ) : (
+              (status === 'processing' || status === 'completed') ? (
+                <LiveStreamPanel jobId={jobId} features={features} onStop={handleReset} />
+              ) : (
+                <div className="aspect-video bg-black rounded-xl border border-surface-600 flex items-center justify-center">
+                  <p className="text-slate-500">Camera preview will appear here</p>
+                </div>
+              )
+            )}
           </div>
         </div>
       </div>

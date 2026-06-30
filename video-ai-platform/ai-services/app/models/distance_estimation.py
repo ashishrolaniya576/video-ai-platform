@@ -228,29 +228,26 @@ class DistanceEstimationModel(BaseModel):
         with torch.inference_mode(), torch.autocast(device_type=self._device, enabled=self._device=="cuda"):
             output = self._model([inputs])[0]
 
-        boxes = output.get("boxes", torch.tensor([])).cpu()
-        labels = output.get("labels", torch.tensor([])).cpu()
-        scores = output.get("scores", torch.tensor([])).cpu()
-        distances = output.get("distances", torch.tensor([])).cpu()
+        boxes = output.get("boxes", torch.tensor([], device=self._device))
+        labels = output.get("labels", torch.tensor([], device=self._device))
+        scores = output.get("scores", torch.tensor([], device=self._device))
+        distances = output.get("distances", torch.tensor([], device=self._device))
 
         # Handle empty detections
         if len(scores) == 0:
-            return frame.copy()
+            return frame
 
-        # Threshold filter
+        # Threshold filter on GPU
         mask = scores > conf_thresh
-        boxes_f = boxes[mask]
-        labels_f = labels[mask]
-        scores_f = scores[mask]
-        distances_f = distances[mask]
+        boxes_f = boxes[mask].cpu().numpy()
+        labels_f = labels[mask].cpu().numpy()
+        scores_f = scores[mask].cpu().numpy()
+        distances_f = distances[mask].cpu().numpy()
 
-        # Work on a copy of original frame so we don't mutate it
-        annotated = frame.copy()
+        # Work directly on original frame for zero-copy memory pipeline
+        annotated = frame
 
-        for box, lbl, scr, dist in zip(boxes_f.numpy(),
-                                       labels_f.numpy(),
-                                       scores_f.numpy(),
-                                       distances_f.numpy()):
+        for box, lbl, scr, dist in zip(boxes_f, labels_f, scores_f, distances_f):
             
             # Scale coordinates back to original frame size
             x1 = int(box[0] * scale_x)

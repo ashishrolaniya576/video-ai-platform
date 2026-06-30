@@ -154,4 +154,16 @@ async function healthCheck(req, res) {
   res.json({ status: 'running', timestamp: new Date().toISOString() });
 }
 
-module.exports = { startProcessing, getStatus, getResult, healthCheck, setSocketIO };
+async function receiveMetrics(req, res, next) {
+  try {
+    const { jobId, metrics } = req.body;
+    if (io && jobId) {
+      io.to(jobId).emit('live_metrics', metrics);
+    }
+    res.status(200).json({ status: 'ok' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { startProcessing, getStatus, getResult, healthCheck, receiveMetrics, setSocketIO };

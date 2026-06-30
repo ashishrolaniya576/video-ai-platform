@@ -108,6 +108,13 @@ class Settings(BaseSettings):
     )
     distance_confidence_threshold: float = Field(default=0.3, alias="DISTANCE_CONFIDENCE_THRESHOLD")
 
+    # ── Watchdog ──────────────────────────────────────────────
+    watchdog_stall_timeout_seconds: float = Field(default=5.0, alias="WATCHDOG_STALL_TIMEOUT_SECONDS")
+    watchdog_queue_warning_threshold: int = Field(default=4, alias="WATCHDOG_QUEUE_WARNING_THRESHOLD")
+    watchdog_queue_critical_threshold: int = Field(default=5, alias="WATCHDOG_QUEUE_CRITICAL_THRESHOLD")
+    watchdog_monitor_interval_ms: int = Field(default=500, alias="WATCHDOG_MONITOR_INTERVAL_MS")
+    watchdog_max_recovery_attempts: int = Field(default=1, alias="WATCHDOG_MAX_RECOVERY_ATTEMPTS")
+
     @field_validator("output_dir", "temp_dir", "models_dir", mode="after")
     @classmethod
     def ensure_directories_exist(cls, v: Path) -> Path:

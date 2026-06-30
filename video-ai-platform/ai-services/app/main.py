@@ -27,12 +27,14 @@ from fastapi.responses import JSONResponse
 
 from app.api.health import router as health_router
 from app.api.process import router as process_router
+from app.streaming.webrtc import router as webrtc_router
 from app.config.settings import settings
 from app.models.heavy_rain_remove import HeavyRainRemovalModel
 from app.models.distance_estimation import DistanceEstimationModel
 from app.models.stabilize import StabilizationModel
 from app.models.video_visibility import VideoVisibilityModel
 from app.pipeline.pipeline import PipelineManager
+from app.pipeline.live_pipeline import LivePipelineManager
 from app.utils.logger import get_logger, setup_logging
 
 setup_logging(settings.log_level)
@@ -66,20 +68,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         "distance_estimation": DistanceEstimationModel(device=device),
     }
 
-    # Validate models at startup (fail fast)
-    logger.info("Validating AI models and checkpoints...")
+    # Validate and Warmup models at startup
+    logger.info("Validating and warming up AI models...")
+    dummy_frame = __import__('numpy').zeros((540, 960, 3), dtype=__import__('numpy').uint8)
+    
     for name, model in models.items():
         try:
             model.load_model()
             if not model.is_available:
                 logger.warning(f"Model {name} validation failed: {model.unavailable_reason}")
-            model.cleanup()
+            else:
+                logger.info(f"Warming up {name}...")
+                # Special case for stabilization streaming
+                if name == "stabilization":
+                    model.process_frame_streaming(dummy_frame, 0)
+                else:
+                    model.process_frame(dummy_frame, 0)
         except Exception as e:
-            logger.warning(f"Failed to validate model {name} during startup: {e}")
+            logger.warning(f"Failed to validate/warmup model {name} during startup: {e}")
 
     # Build pipeline and attach to app state
     pipeline = PipelineManager(models=models)
     app.state.pipeline = pipeline
+    
+    live_pipeline = LivePipelineManager(models=models)
+    app.state.live_pipeline = live_pipeline
 
     logger.info("Pipeline manager ready with models: %s", list(models.keys()))
     logger.info("AI Service is ready to accept requests on port %d", settings.port)
@@ -136,6 +149,7 @@ def create_app() -> FastAPI:
     # Register routers
     app.include_router(health_router, prefix="", tags=["Health"])
     app.include_router(process_router, prefix="", tags=["Processing"])
+    app.include_router(webrtc_router, prefix="", tags=["WebRTC"])
 
     return app
 
