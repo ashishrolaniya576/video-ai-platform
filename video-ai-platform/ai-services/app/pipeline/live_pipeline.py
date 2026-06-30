@@ -62,9 +62,6 @@ class GpuHealthState(Enum):
     DEGRADED = "DEGRADED"
     UNAVAILABLE = "UNAVAILABLE"
 
-# Global tracking of GPU health
-GLOBAL_GPU_STATE = GpuHealthState.HEALTHY
-
 # Event transition map for centralized ownership
 STATE_MACHINE = {
     SessionState.CREATED: {SessionEvent.INITIALIZE: SessionState.INITIALIZING},
@@ -458,7 +455,6 @@ class LiveSession:
                     self.dropped_frames += 1
                     
             except Exception as e:
-                global GLOBAL_GPU_STATE
                 
                 error_cat = classify_cuda_error(e)
                 
@@ -484,8 +480,7 @@ class LiveSession:
                             self.transition_state(SessionState.FAILED, f"Recovery from CUDA OOM failed: {e}")
                 elif error_cat == CudaErrorCategory.FATAL:
                     # Context is corrupted. Mark server as DEGRADED.
-                    logger.critical(f"[Session: {self.session_uuid}] FATAL CUDA ERROR detected. Marking server as DEGRADED.")
-                    GLOBAL_GPU_STATE = GpuHealthState.DEGRADED
+                    logger.critical(f"[Session: {self.session_uuid}] FATAL CUDA ERROR detected.")
                     if self.is_running:
                         self.transition_state(SessionState.FAILED, f"Fatal GPU error: {e}")
                 else:
@@ -649,17 +644,16 @@ class LivePipelineManager:
             self.stop_session(s_id)
 
     def start_session(self, session_id: str, request: dict):
-        if GLOBAL_GPU_STATE == GpuHealthState.DEGRADED:
-            logger.warning(f"Rejecting new session {session_id} because server is in DEGRADED GPU state.")
-            raise RuntimeError("Server is currently in DEGRADED GPU state. New live streams are rejected.")
-            
         if session_id in self.sessions:
             logger.info(f"Session {session_id} already running.")
             return
             
-        session = LiveSession(session_id, request, self._models, ["stabilization", "heavy_rain_removal", "video_visibility", "distance_estimation"])
-        session._pipeline_manager = self
+        session = LiveSession(session_id, request, self._models, ["stabilization", "heavy_rain_removal", "video_visibility", "distance_estimation"], self.publish_event)
         self.sessions[session_id] = session
+        
+        self.publish_event(session_id, SessionEvent.INITIALIZE, "Session created and initializing")
+        
+        # Start worker thread will be triggered dynamically by FRAME_ENQUEUED
         session.start()
 
     def stop_session(self, session_id: str):

@@ -15,7 +15,8 @@ import psutil
 import torch
 
 from app.utils.logger import get_logger
-from app.pipeline.live_pipeline import GLOBAL_GPU_STATE, GpuHealthState
+from app.pipeline.live_pipeline import GpuHealthState
+from app.pipeline.model_manager import model_manager
 
 logger = get_logger(__name__)
 
@@ -24,6 +25,8 @@ router = APIRouter()
 
 class HealthResponse(BaseModel):
     status: str
+    backend_state: str
+    startup_progress: int
     device: Optional[str] = None
     models_loaded: Dict[str, bool] = {}
 
@@ -37,16 +40,14 @@ class HealthResponse(BaseModel):
 async def health_check(request: Request) -> HealthResponse:
     models_loaded: Dict[str, bool] = {}
 
-    pipeline = getattr(request.app.state, "pipeline", None)
-    if pipeline is not None:
-        for name, model in pipeline._models.items():
-            models_loaded[name] = model.is_loaded
-
-    device = getattr(request.app.state, "device", None)
+    for name, model in model_manager.models.items():
+        models_loaded[name] = getattr(model, 'is_available', False)
 
     return HealthResponse(
         status="running",
-        device=device,
+        backend_state=model_manager.state.name,
+        startup_progress=model_manager.startup_progress,
+        device=model_manager.device,
         models_loaded=models_loaded,
     )
 
@@ -78,13 +79,11 @@ class LiveHealthResponse(BaseModel):
     summary="Live Streaming Health Check",
 )
 async def live_health_check(request: Request) -> LiveHealthResponse:
-    pipeline = getattr(request.app.state, "pipeline", None)
     live_pipeline = getattr(request.app.state, "live_pipeline", None)
     
     models_loaded: Dict[str, bool] = {}
-    if pipeline:
-        for name, model in pipeline._models.items():
-            models_loaded[name] = model.is_loaded
+    for name, model in model_manager.models.items():
+        models_loaded[name] = getattr(model, 'is_available', False)
             
     # System stats
     cpu_usage = psutil.cpu_percent(interval=None)
@@ -152,10 +151,15 @@ async def live_health_check(request: Request) -> LiveHealthResponse:
     # Penalty for recoveries: - recoveries * 10
     score = 100
     
-    if GLOBAL_GPU_STATE == GpuHealthState.DEGRADED:
-        score -= 100
-    elif GLOBAL_GPU_STATE == GpuHealthState.WARNING:
-        score -= 20
+    # Check global GPU state from model_manager (we removed the singleton)
+    # But since it's dynamic, we just check CUDA directly
+    gpu_status = GpuHealthState.HEALTHY.name
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.current_device()
+        except Exception:
+            gpu_status = GpuHealthState.UNAVAILABLE.name
+            score -= 100
         
     if avg_latency_overall > 100:
         score -= int((avg_latency_overall - 100) / 10)
@@ -170,7 +174,7 @@ async def live_health_check(request: Request) -> LiveHealthResponse:
             
     return LiveHealthResponse(
         serverStatus=status,
-        gpuStatus=GLOBAL_GPU_STATE.name,
+        gpuStatus=gpu_status,
         healthScore=score,
         serverUptime=time.time() - START_TIME,
         cpuUsage=cpu_usage,
