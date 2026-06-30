@@ -197,6 +197,9 @@ class LiveSession:
             "reason": reason
         })
         
+        if new_state in [SessionState.FAILED, SessionState.STOPPING, SessionState.TERMINATED]:
+            self.is_running = False
+        
         logger.info(
             f"[Session: {self.session_uuid}] [Worker: {self.worker_uuid}] "
             f"State Transition: {prev_state.name} -> {self.current_state.name} "
@@ -506,17 +509,17 @@ class LiveSession:
                             torch.cuda.empty_cache()
                         success = self.recover()
                         if not success:
-                            self.transition_state(SessionState.FAILED, f"Recovery from CUDA OOM failed: {e}")
+                            self._publish_event(SessionEvent.ERROR_OCCURRED, f"Recovery from CUDA OOM failed: {e}")
                 elif error_cat == CudaErrorCategory.FATAL:
                     # Context is corrupted. Mark server as DEGRADED.
                     logger.critical(f"[Session: {self.session_uuid}] FATAL CUDA ERROR detected.")
                     if self.is_running:
-                        self.transition_state(SessionState.FAILED, f"Fatal GPU error: {e}")
+                        self._publish_event(SessionEvent.ERROR_OCCURRED, f"Fatal GPU error: {e}")
                 else:
                     # Normal exceptions
                     logger.error(f"[Worker: {self.worker_uuid}] Inference loop crashed: {e}")
                     if self.is_running:
-                        self.transition_state(SessionState.FAILED, f"Worker crashed: {e}")
+                        self._publish_event(SessionEvent.ERROR_OCCURRED, f"Worker crashed: {e}")
                 
                 break  # Break out of the loop on any fatal unhandled exception
                 
