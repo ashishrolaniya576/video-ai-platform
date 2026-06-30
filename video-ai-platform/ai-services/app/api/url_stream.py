@@ -114,7 +114,7 @@ async def generate_mjpeg_stream(session_id: str, pipeline: LivePipelineManager):
         while session.is_running:
             try:
                 # Use a non-blocking get to yield control back to the event loop
-                frame = session.output_queue.get_nowait()
+                item = session.output_queue.get_nowait()
                 last_keepalive_time = 0.0 # reset on actual frame
             except queue.Empty:
                 # If stream is initializing, yield a loading frame every 1 second to prevent browser timeout
@@ -137,8 +137,13 @@ async def generate_mjpeg_stream(session_id: str, pipeline: LivePipelineManager):
                 await asyncio.sleep(0.01)
                 continue
 
-            if frame is None:
+            if item is None:
                 break
+                
+            if isinstance(item, tuple) and len(item) == 2:
+                frame_id, frame = item
+            else:
+                frame = item
 
             # Encode frame to JPEG
             ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])

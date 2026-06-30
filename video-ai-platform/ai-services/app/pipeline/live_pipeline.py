@@ -230,10 +230,19 @@ class LiveSession:
         
         time_since_heartbeat = now - self.last_heartbeat
         
-        if time_since_heartbeat > settings.watchdog_stall_timeout_seconds and self.is_running:
+        # Phase 14: Dynamic Watchdog Timeout
+        # PromptIR/VideoVisibility is a heavy transformer and may legitimately take many seconds
+        stall_timeout = settings.watchdog_stall_timeout_seconds
+        slow_timeout = 5.0
+        
+        if "VideoVisibility" in self.current_stage or "PromptIR" in self.current_stage:
+            stall_timeout = max(stall_timeout, 45.0)  # Allow up to 45s for heavy inference before killing it
+            slow_timeout = max(slow_timeout, 15.0)
+        
+        if time_since_heartbeat > stall_timeout and self.is_running:
             return SessionHealth.STALLED
             
-        if time_since_heartbeat > 5.0 and self.is_running:
+        if time_since_heartbeat > slow_timeout and self.is_running:
             return SessionHealth.SLOW_INFERENCE
             
         if qsize >= settings.watchdog_queue_critical_threshold:
@@ -358,15 +367,23 @@ class LiveSession:
                 logger.info(f"[Worker: {self.worker_uuid}] START queue.get() [QSize: {self.frame_queue.qsize()}]")
                 wait_start = time.perf_counter()
                 try:
-                    frame = self.frame_queue.get(timeout=0.5)
+                    item = self.frame_queue.get(timeout=0.5)
                 except queue.Empty:
                     continue
 
                 queue_wait_time = time.perf_counter() - wait_start
                 logger.info(f"[Worker: {self.worker_uuid}] END queue.get() | Elapsed: {queue_wait_time:.3f}s")
                 
-                if frame is None:
+                if item is None:
                     break  # Stop signal
+                    
+                if isinstance(item, tuple) and len(item) == 2:
+                    frame_id, frame = item
+                else:
+                    frame_id = str(uuid.uuid4())
+                    frame = item
+                
+                logger.info(f"[TRACE] Worker dequeued frame_id={frame_id}")
                 
                 if not first_frame_received:
                     logger.info(f"[Worker: {self.worker_uuid}] First frame received from queue.")
@@ -393,6 +410,14 @@ class LiveSession:
                             processed_frame = model.process_frame(processed_frame, self.frame_idx, request=self.request)
                             
                         model_elapsed = time.perf_counter() - model_start_time
+                        
+                        # Phase 9 Check: Identity Mapping (Did the model do anything?)
+                        if np.array_equal(processed_frame, frame) and feature_name != "distance_estimation":
+                            logger.warning(
+                                f"[Worker: {self.worker_uuid}] Phase 9 Warning: {current_model_name} "
+                                f"returned an exact identical frame (Identity Mapping). "
+                                f"Possible causes: threshold too high, model skipped, or logic error."
+                            )
                         
                         gpu_mem = torch.cuda.memory_allocated() / (1024*1024) if torch.cuda.is_available() else 0.0
                         logger.info(f"[Worker: {self.worker_uuid}] END inference [{current_model_name}] Frame {self.frame_idx} | Elapsed: {model_elapsed:.3f}s | GPU Mem: {gpu_mem:.1f}MB")
@@ -444,7 +469,8 @@ class LiveSession:
                     logger.info(f"[Worker: {self.worker_uuid}] START queue.put() [QSize: {self.output_queue.qsize()}]")
                     put_start = time.perf_counter()
                     
-                    self.output_queue.put_nowait(processed_frame)
+                    self.output_queue.put_nowait((frame_id, processed_frame))
+                    logger.info(f"[TRACE] Worker enqueued frame_id={frame_id} to output_queue")
                     
                     put_elapsed = time.perf_counter() - put_start
                     logger.info(f"[Worker: {self.worker_uuid}] END queue.put() | Elapsed: {put_elapsed:.3f}s")
@@ -682,7 +708,9 @@ class LivePipelineManager:
                     break
         
         try:
-            session.frame_queue.put_nowait(frame)
+            frame_id = str(uuid.uuid4())
+            session.frame_queue.put_nowait((frame_id, frame))
+            logger.info(f"[TRACE] WebRTC enqueued frame_id={frame_id} to frame_queue")
         except queue.Full:
             session.dropped_frames += 1
 
@@ -691,7 +719,14 @@ class LivePipelineManager:
             # We await slightly to allow the background thread to run
             await asyncio.sleep(0.001)
             # Try to get the latest processed frame
-            processed_frame = session.output_queue.get_nowait()
+            item = session.output_queue.get_nowait()
+            
+            if isinstance(item, tuple) and len(item) == 2:
+                frame_id, processed_frame = item
+                logger.info(f"[TRACE] WebRTC dequeued frame_id={frame_id} from output_queue")
+            else:
+                processed_frame = item
+                
             return processed_frame
         except queue.Empty:
             # If no frame is ready yet, we return None (track will handle it)

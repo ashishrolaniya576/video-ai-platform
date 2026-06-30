@@ -1,6 +1,7 @@
 import threading
 import queue
 import time
+import uuid
 from abc import ABC, abstractmethod
 from typing import Optional
 
@@ -147,7 +148,8 @@ class URLStreamReader(BaseStreamReader):
                         pass
                 
                 try:
-                    session.frame_queue.put(frame, timeout=0.1)
+                    frame_id = str(uuid.uuid4())
+                    session.frame_queue.put((frame_id, frame), timeout=0.1)
                     
                     # First frame successfully enqueued, transition to STREAMING (or FIRST_FRAME_ENQUEUED which starts worker)
                     if session.current_state in [SessionState.FIRST_FRAME_DECODED]:

@@ -91,7 +91,7 @@ class VideoVisibilityModel(BaseModel):
         self._tile_batch_size = max(1, min(8, settings.promptir_tile_batch_size))
         self._enable_amp = settings.promptir_enable_amp
         self._enable_channels_last = settings.promptir_enable_channels_last
-        self._enable_compile = settings.promptir_enable_compile
+        self._enable_compile = False # CRITICAL: torch.compile re-compiles on every frame due to dynamic border tile shapes.
         self._profile = settings.promptir_profile
         
         # GPU Optimizations
@@ -176,14 +176,9 @@ class VideoVisibilityModel(BaseModel):
         logger.info("%s: loading network on %s", self.name, self._device)
         torch_device = torch.device(self._device)
         
-        # Dynamic Tile Scaling based on VRAM (if on CUDA)
-        if torch_device.type == "cuda":
-            total_vram = torch.cuda.get_device_properties(torch_device).total_memory
-            # If VRAM > 12GB, we can afford larger tiles (e.g. 1024), reducing overhead
-            if total_vram > 12 * 1024**3:
-                self.tile_size = 1024
-                self.tile_overlap = 64
-                logger.info("%s: Detected >12GB VRAM. Scaling tile_size to %d for throughput.", self.name, self.tile_size)
+        # Removed Dynamic Tile Scaling to 1024 because PromptIR's Transformer Attention 
+        # is O(N^2) and 1024x1024 tiles cause the sequence length to explode to 1,048,576.
+        # This was causing 10-60 seconds of latency per frame. We stick to max 512.
 
         # Initialize network
         model = PromptIRWrapper(PromptIR)

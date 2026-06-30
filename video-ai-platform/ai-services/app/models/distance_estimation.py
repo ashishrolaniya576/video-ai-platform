@@ -243,6 +243,9 @@ class DistanceEstimationModel(BaseModel):
         scores = output.get("scores", torch.tensor([], device=self._device))
         distances = output.get("distances", torch.tensor([], device=self._device))
 
+        if len(scores) > 0 and frame_idx % 25 == 0:
+            logger.info(f"[DistanceEstimation] Frame {frame_idx} | Raw Scores Max: {scores.max().item():.3f} | Raw Detections: {len(scores)}")
+
         # Handle empty detections
         if len(scores) == 0:
             postprocess_time = time.perf_counter() - postprocess_start
