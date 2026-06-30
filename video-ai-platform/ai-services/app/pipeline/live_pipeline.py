@@ -62,7 +62,7 @@ class InvalidStateTransitionError(Exception):
 class CudaErrorCategory(Enum):
     RECOVERABLE = "RECOVERABLE"
     FATAL = "FATAL"
-    UNKNOWN = "UNKNOWN"
+    GENERAL = "GENERAL"
 
 
 def classify_cuda_error(e: Exception) -> CudaErrorCategory:
@@ -80,7 +80,7 @@ def classify_cuda_error(e: Exception) -> CudaErrorCategory:
     if "illegal memory access" in error_msg or "device-side assert" in error_msg or "cuda error" in error_msg:
         return CudaErrorCategory.FATAL
         
-    return CudaErrorCategory.UNKNOWN
+    return CudaErrorCategory.GENERAL
 
 
 class LiveSession:
@@ -132,10 +132,14 @@ class LiveSession:
         self.dropped_frames = 0
         self.input_frames = 0
         
-        self.transition_state(SessionState.LOADING_MODELS, "Loading requested models")
-        # Build active models list
-        self.active_models = self._build_pipeline()
-        self.transition_state(SessionState.READY, "Pipeline built successfully")
+        try:
+            self.transition_state(SessionState.LOADING_MODELS, "Loading requested models")
+            # Build active models list
+            self.active_models = self._build_pipeline()
+            self.transition_state(SessionState.READY, "Pipeline built successfully")
+        except Exception as e:
+            self.transition_state(SessionState.FAILED, f"Initialization failed: {e}")
+            raise
 
     def transition_state(self, new_state: SessionState, reason: str = ""):
         """Enforce strict state transitions and log history."""
@@ -209,7 +213,7 @@ class LiveSession:
         self.metrics_thread = threading.Thread(target=self._metrics_loop, daemon=True)
         self.metrics_thread.start()
         
-        logger.info(f"[Worker: {self.worker_id}] Live session {self.session_id} started.")
+        logger.info(f"[Worker: {self.worker_uuid}] Live session {self.session_id} started.")
 
     def recover(self) -> bool:
         """
@@ -221,7 +225,7 @@ class LiveSession:
             return False
             
         self.recovery_attempts += 1
-        prev_worker_id = self.worker_uuid
+        prev_worker_uuid = self.worker_uuid
         self.transition_state(SessionState.RECOVERING, f"Starting recovery attempt {self.recovery_attempts}")
         
         # 1. Signal shutdown to existing worker
@@ -257,7 +261,7 @@ class LiveSession:
         # 4. Generate new worker ID and restart
         self.worker_uuid = str(uuid.uuid4())
         self.last_successful_inference = time.time()
-        logger.info(f"[Session: {self.session_uuid}] Graceful recovery complete. Worker {prev_worker_id} -> {self.worker_uuid}")
+        logger.info(f"[Session: {self.session_uuid}] Graceful recovery complete. Worker {prev_worker_uuid} -> {self.worker_uuid}")
         
         # 5. Restart streaming
         self.start()
@@ -271,7 +275,7 @@ class LiveSession:
             pass
             
         self.is_running = False
-        if self.worker_thread:
+        if self.worker_thread and self.worker_thread.is_alive():
             # Unblock queue
             try:
                 self.frame_queue.put(None, timeout=1)
@@ -279,7 +283,7 @@ class LiveSession:
                 pass
             self.worker_thread.join(timeout=2.0)
             
-        if self.metrics_thread:
+        if self.metrics_thread and self.metrics_thread.is_alive():
             self.metrics_thread.join(timeout=2.0)
             
         try:
@@ -296,6 +300,20 @@ class LiveSession:
 
     def _inference_loop(self):
         """Background thread that pulls frames from queue and runs AI models."""
+        logger.info(f"=== WORKER STARTUP [Session: {self.session_uuid} | Worker: {self.worker_uuid}] ===")
+        logger.info("1. Session created and state READY.")
+        logger.info(f"2. Worker thread started. UUID: {self.worker_uuid}")
+        if torch.cuda.is_available():
+            logger.info("3. CUDA initialized. GPU is available.")
+        else:
+            logger.info("3. CUDA not available. Running on CPU.")
+        logger.info(f"4. Models attached: {[m.name for _, m in self.active_models]}")
+        logger.info("5. Input queue and Output queue created.")
+        logger.info("6. Inference loop entered.")
+        
+        first_frame_received = False
+        first_frame_processed = False
+
         while self.is_running:
             try:
                 # Wait for a frame
@@ -306,16 +324,43 @@ class LiveSession:
                 if frame is None:
                     break  # Stop signal
                 
+                if not first_frame_received:
+                    logger.info(f"[Worker: {self.worker_uuid}] First frame received from queue.")
+                    first_frame_received = True
+                
                 self.last_frame_timestamp = time.time()
                 start_time = time.perf_counter()
                 
                 # Process frame
                 processed_frame = frame
-                for feature_name, model in self.active_models:
-                    if feature_name == "stabilization" and hasattr(model, "process_frame_streaming"):
-                        processed_frame = model.process_frame_streaming(processed_frame, self.frame_idx, session_id=self.session_uuid)
-                    else:
-                        processed_frame = model.process_frame(processed_frame, self.frame_idx, request=self.request)
+                current_model_name = "None"
+                
+                try:
+                    for feature_name, model in self.active_models:
+                        current_model_name = model.name
+                        if feature_name == "stabilization" and hasattr(model, "process_frame_streaming"):
+                            processed_frame = model.process_frame_streaming(processed_frame, self.frame_idx, session_id=self.session_uuid)
+                        else:
+                            processed_frame = model.process_frame(processed_frame, self.frame_idx, request=self.request)
+                except Exception as model_e:
+                    gpu_mem = torch.cuda.memory_allocated() / (1024*1024) if torch.cuda.is_available() else 0.0
+                    gpu_res = torch.cuda.memory_reserved() / (1024*1024) if torch.cuda.is_available() else 0.0
+                    import traceback
+                    tb = traceback.format_exc()
+                    logger.error(
+                        f"=== INFERENCE CRASH ===\n"
+                        f"Exception Type: {type(model_e).__name__}\n"
+                        f"Message: {model_e}\n"
+                        f"Current Model: {current_model_name}\n"
+                        f"Current Frame: {self.frame_idx}\n"
+                        f"GPU Mem Alloc: {gpu_mem:.1f} MB, Res: {gpu_res:.1f} MB\n"
+                        f"Session UUID: {self.session_uuid}\n"
+                        f"Worker UUID: {self.worker_uuid}\n"
+                        f"State: {self.current_state.name}\n"
+                        f"Traceback:\n{tb}\n"
+                        f"======================="
+                    )
+                    raise  # Re-raise to be classified and handled by outer try-except
                 
                 self.frame_idx += 1
                 self.processed_frames += 1
@@ -324,6 +369,10 @@ class LiveSession:
                 inf_time = time.perf_counter() - start_time
                 self.last_inference_time = inf_time
                 self.max_inference_time = max(self.max_inference_time, inf_time)
+                
+                if not first_frame_processed:
+                    logger.info(f"[Worker: {self.worker_uuid}] First frame processed in {inf_time:.3f}s.")
+                    first_frame_processed = True
                 
                 # Add to profiling (limit to last 100 frames)
                 self.profiling["queue_wait"].append(queue_wait_time * 1000)
@@ -335,6 +384,8 @@ class LiveSession:
                 # Push to output (drop if full during normal operation, but shouldn't block)
                 try:
                     self.output_queue.put_nowait(processed_frame)
+                    if self.frame_idx == 1:
+                        logger.info(f"[Worker: {self.worker_uuid}] First frame sent to output queue.")
                 except queue.Full:
                     self.dropped_frames += 1
                     
@@ -522,7 +573,7 @@ class LivePipelineManager:
 
         session.input_frames += 1
 
-        # Put new frame in queue
+        # Put new frame in queue without blocking asyncio loop
         if session.frame_queue.full():
             try:
                 # Drop oldest frame to keep latency low
@@ -531,7 +582,10 @@ class LivePipelineManager:
             except queue.Empty:
                 pass
         
-        session.frame_queue.put(frame)
+        try:
+            session.frame_queue.put_nowait(frame)
+        except queue.Full:
+            session.dropped_frames += 1
 
         # Retrieve a processed frame if available (don't block forever)
         try:

@@ -58,25 +58,36 @@ class VideoTransformTrack(MediaStreamTrack):
         self.pipeline_manager.start_session(self.session_id, self.request)
 
     async def recv(self) -> VideoFrame:
-        # Get frame from incoming WebRTC stream
-        frame = await self.track.recv()
+        import time
+        start_time = time.perf_counter()
+        logger.info(f"[WebRTC] START recv() - Session: {self.session_id}")
+        
+        try:
+            # Get frame from incoming WebRTC stream
+            frame = await self.track.recv()
 
-        # Convert to BGR numpy array
-        img = frame.to_ndarray(format="bgr24")
+            # Convert to BGR numpy array
+            img = frame.to_ndarray(format="bgr24")
 
-        # Process frame via LivePipelineManager
-        processed_img = await self.pipeline_manager.process_frame_async(self.session_id, img)
+            # Process frame via LivePipelineManager
+            processed_img = await self.pipeline_manager.process_frame_async(self.session_id, img)
 
-        if processed_img is None:
-            # If the pipeline failed or dropped the frame, return original
-            processed_img = img
+            if processed_img is None:
+                # If the pipeline failed or dropped the frame, return original
+                processed_img = img
 
-        # Convert back to VideoFrame
-        new_frame = VideoFrame.from_ndarray(processed_img, format="bgr24")
-        new_frame.pts = frame.pts
-        new_frame.time_base = frame.time_base
+            # Convert back to VideoFrame
+            new_frame = VideoFrame.from_ndarray(processed_img, format="bgr24")
+            new_frame.pts = frame.pts
+            new_frame.time_base = frame.time_base
 
-        return new_frame
+            elapsed = time.perf_counter() - start_time
+            logger.info(f"[WebRTC] END recv() - Session: {self.session_id} | Elapsed: {elapsed:.3f}s")
+            return new_frame
+        except Exception as e:
+            elapsed = time.perf_counter() - start_time
+            logger.error(f"[WebRTC] FAILED recv() - Session: {self.session_id} | Error: {e} | Elapsed: {elapsed:.3f}s")
+            raise
 
     def stop(self):
         super().stop()
@@ -96,39 +107,60 @@ async def rtc_offer(body: WebRTCOfferSchema, request: Request):
             detail="Live Pipeline is not initialized."
         )
 
-    offer = RTCSessionDescription(sdp=body.sdp, type=body.type)
-    pc = RTCPeerConnection()
-    pcs.add(pc)
+    try:
+        offer = RTCSessionDescription(sdp=body.sdp, type=body.type)
+        pc = RTCPeerConnection()
+        pcs.add(pc)
 
-    @pc.on("connectionstatechange")
-    async def on_connectionstatechange():
-        logger.info(f"WebRTC Connection state is {pc.connectionState}")
-        if pc.connectionState == "failed" or pc.connectionState == "closed":
-            await pc.close()
-            pcs.discard(pc)
-            live_pipeline.stop_session(body.videoPath)
+        @pc.on("connectionstatechange")
+        async def on_connectionstatechange():
+            logger.info(f"WebRTC Connection state is {pc.connectionState}")
+            if pc.connectionState == "failed" or pc.connectionState == "closed":
+                await pc.close()
+                pcs.discard(pc)
+                live_pipeline.stop_session(body.videoPath)
 
-    @pc.on("track")
-    def on_track(track):
-        logger.info(f"WebRTC Track received: {track.kind}")
-        if track.kind == "video":
-            # Create the transform track and add it to the peer connection
-            request_params = {
-                "videoPath": body.videoPath,
-                "stabilization": body.stabilization,
-                "heavy_rain_removal": body.heavyRainRemoval,
-                "video_visibility": body.videoVisibility,
-                "distance_estimation": body.distanceEstimation,
-            }
-            local_video = VideoTransformTrack(track, live_pipeline, request_params)
-            pc.addTrack(local_video)
+        @pc.on("track")
+        def on_track(track):
+            logger.info(f"WebRTC Track received: {track.kind}")
+            if track.kind == "video":
+                # Create the transform track and add it to the peer connection
+                request_params = {
+                    "videoPath": body.videoPath,
+                    "stabilization": body.stabilization,
+                    "heavy_rain_removal": body.heavyRainRemoval,
+                    "video_visibility": body.videoVisibility,
+                    "distance_estimation": body.distanceEstimation,
+                }
+                local_video = VideoTransformTrack(track, live_pipeline, request_params)
+                pc.addTrack(local_video)
 
-    # Handle the offer
-    await pc.setRemoteDescription(offer)
-    answer = await pc.createAnswer()
-    await pc.setLocalDescription(answer)
+        # Handle the offer
+        await pc.setRemoteDescription(offer)
+        answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
 
-    return WebRTCAnswerSchema(
-        sdp=pc.localDescription.sdp,
-        type=pc.localDescription.type
-    )
+        return WebRTCAnswerSchema(
+            sdp=pc.localDescription.sdp,
+            type=pc.localDescription.type
+        )
+    except Exception as e:
+        import traceback
+        import sys
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        tb = traceback.extract_tb(exc_traceback)
+        filename = tb[-1].filename if tb else "Unknown"
+        lineno = tb[-1].lineno if tb else 0
+        
+        error_details = {
+            "error": str(e),
+            "type": type(e).__name__,
+            "file": filename,
+            "line": lineno,
+            "traceback": traceback.format_exc()
+        }
+        logger.error(f"Failed to process WebRTC offer: {error_details}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=error_details
+        )
