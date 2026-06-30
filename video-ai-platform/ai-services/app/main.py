@@ -27,6 +27,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.health import router as health_router
 from app.api.process import router as process_router
+from app.api.url_stream import router as url_stream_router
 from app.streaming.webrtc import router as webrtc_router
 from app.config.settings import settings
 from app.models.heavy_rain_remove import HeavyRainRemovalModel
@@ -150,6 +151,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router, prefix="", tags=["Health"])
     app.include_router(process_router, prefix="", tags=["Processing"])
     app.include_router(webrtc_router, prefix="", tags=["WebRTC"])
+    app.include_router(url_stream_router, prefix="/api", tags=["URLStream"])
 
     return app
 

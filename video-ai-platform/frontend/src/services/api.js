@@ -103,3 +103,25 @@ export async function downloadVideoUrl(url) {
 
   return response.data;
 }
+
+/**
+ * Start a URL-based live stream session.
+ */
+export async function startUrlLiveStream({ url, stabilization, heavyRainRemoval, videoVisibility, distanceEstimation }) {
+  const response = await api.post('/live/start_url', {
+    url,
+    stabilization,
+    heavyRainRemoval,
+    videoVisibility,
+    distanceEstimation,
+  });
+  return response.data;
+}
+
+/**
+ * Stop a URL-based live stream session.
+ */
+export async function stopUrlLiveStream(sessionId) {
+  const response = await api.post(`/live/stop_url/${sessionId}`);
+  return response.data;
+}

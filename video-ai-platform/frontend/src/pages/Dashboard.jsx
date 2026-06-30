@@ -6,7 +6,8 @@ import LogsPanel from '../components/LogsPanel.jsx';
 import OutputPanel from '../components/OutputPanel.jsx';
 import VideoInputPanel from '../components/VideoInputPanel.jsx';
 import LiveStreamPanel from '../components/LiveStreamPanel.jsx';
-import { startProcessing, uploadVideoFile, downloadVideoUrl, getJobStatus, getJobResult } from '../services/api.js';
+import UrlStreamPanel from '../components/UrlStreamPanel.jsx';
+import { startProcessing, uploadVideoFile, downloadVideoUrl, getJobStatus, getJobResult, startUrlLiveStream } from '../services/api.js';
 import { subscribeToJob, isSocketConnected, cancelJobEvent } from '../services/socket.js';
 
 const INITIAL_FEATURES = { stabilization: false, heavyRainRemoval: false, videoVisibility: false, distanceEstimation: false };
@@ -82,6 +83,10 @@ function Dashboard() {
   const [sourceError, setSourceError] = useState('');
   const [featureError, setFeatureError] = useState('');
   const [apiError, setApiError] = useState('');
+  
+  // ── Live Stream Specific ──────────────────────────────────────────────────
+  const [liveInputType, setLiveInputType] = useState('webcam'); // 'webcam' or 'url'
+  const [liveUrl, setLiveUrl] = useState('');
 
   const appendLog = useCallback((message, level = 'info') => {
     setLogs((prev) => [...prev, createLog(message, level)]);
@@ -97,6 +102,9 @@ function Dashboard() {
 
     if (mode === 'offline' && !inputSource) {
       setSourceError('Please select a video file or enter a video URL.');
+      valid = false;
+    } else if (mode === 'live' && liveInputType === 'url' && !liveUrl.trim()) {
+      setSourceError('Please enter a valid Stream URL (rtsp://, rtmp://, http://).');
       valid = false;
     } else {
       setSourceError('');
@@ -146,28 +154,28 @@ function Dashboard() {
     if (mode === 'live') {
       appendLog('Initializing Live Streaming Mode…', 'info');
       try {
-        // We will signal to a component that handles WebRTC to start
-        // For now, let's just set the job ID to a live session ID
-        const liveJobId = `live_${Date.now()}`;
-        setJobId(liveJobId);
+        if (liveInputType === 'url') {
+          appendLog(`Requesting URL stream connection for: ${liveUrl}`, 'system');
+          const data = await startUrlLiveStream({ url: liveUrl, ...features });
+          setJobId(data.session_id);
+          appendLog(`Connected to stream. Session: ${data.session_id}`, 'success');
+        } else {
+          const liveJobId = `live_${Date.now()}`;
+          setJobId(liveJobId);
+          appendLog('Live stream session initialized. Activating camera...', 'success');
+        }
+        
         setStatus('processing');
         setCurrentStage('Live Streaming');
-        appendLog('Live stream session initialized. Activating camera...', 'success');
         
         // Connect socket for metrics
-        unsubscribeRef.current = subscribeToJob(liveJobId, {
+        unsubscribeRef.current = subscribeToJob(jobIdRef.current || jobId, {
           onSubscribed: () => appendLog('Subscribed to live metrics', 'system'),
           onMetrics: (payload) => {
-            // Logs a concise message showing metrics
             const msg = `Inf FPS: ${payload.inferenceFps} | In FPS: ${payload.inputFps} | Max Latency: ${payload.maxLatencyMs}ms | Queue: ${payload.inputQueue}/${payload.outputQueue} | Dropped: ${payload.droppedFrames} | GPU Mem: ${payload.gpuMemoryMb}MB`;
             appendLog(msg, 'info');
-          },
-          onProgress: (payload) => {
-             // We can use a custom event or reuse progress_update for metrics
           }
         });
-        
-        // The actual WebRTC logic will be handled by a new component `LiveStreamOutput` that will mount when `status === 'processing' && mode === 'live'`
       } catch (err) {
         setStatus('failed');
         setApiError(err.message);
@@ -403,6 +411,56 @@ function Dashboard() {
                   externalError={sourceError}
                 />
               )}
+              
+              {/* ── Live Stream Source Input ── */}
+              {mode === 'live' && (
+                <div className="space-y-4">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Live Input Source</p>
+                  <div className="flex gap-4">
+                    <label className={`flex items-center gap-2 cursor-pointer ${isSubmitDisabled ? 'opacity-50' : ''}`}>
+                      <input 
+                        type="radio" 
+                        name="liveInput" 
+                        value="webcam" 
+                        checked={liveInputType === 'webcam'}
+                        onChange={() => setLiveInputType('webcam')}
+                        disabled={isSubmitDisabled}
+                        className="text-brand-500 bg-surface-800 border-surface-600 focus:ring-brand-500"
+                      />
+                      <span className="text-sm font-medium text-slate-300">Webcam</span>
+                    </label>
+                    <label className={`flex items-center gap-2 cursor-pointer ${isSubmitDisabled ? 'opacity-50' : ''}`}>
+                      <input 
+                        type="radio" 
+                        name="liveInput" 
+                        value="url" 
+                        checked={liveInputType === 'url'}
+                        onChange={() => setLiveInputType('url')}
+                        disabled={isSubmitDisabled}
+                        className="text-brand-500 bg-surface-800 border-surface-600 focus:ring-brand-500"
+                      />
+                      <span className="text-sm font-medium text-slate-300">Stream URL</span>
+                    </label>
+                  </div>
+                  
+                  {liveInputType === 'url' && (
+                    <div className="pt-2 animate-fade-in">
+                      <input
+                        type="url"
+                        placeholder="rtsp://, rtmp://, http://..."
+                        className="w-full bg-surface-800 border border-surface-600 rounded-xl px-4 py-3 text-sm text-slate-200 focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-all placeholder:text-slate-500"
+                        value={liveUrl}
+                        onChange={(e) => setLiveUrl(e.target.value)}
+                        disabled={isSubmitDisabled}
+                        required
+                      />
+                    </div>
+                  )}
+                  {sourceError && (
+                    <p className="text-xs text-rose-400 mt-2">{sourceError}</p>
+                  )}
+                </div>
+              )}
 
               {/* ── Feature Selection ── */}
               <FeaturePanel
@@ -539,7 +597,11 @@ function Dashboard() {
               <OutputPanel outputVideo={outputVideo} detectionSummary={detectionSummary} />
             ) : (
               (status === 'processing' || status === 'completed') ? (
-                <LiveStreamPanel jobId={jobId} features={features} onStop={handleReset} />
+                liveInputType === 'webcam' ? (
+                  <LiveStreamPanel jobId={jobId} features={features} onStop={handleReset} />
+                ) : (
+                  <UrlStreamPanel jobId={jobId} features={features} onStop={handleReset} />
+                )
               ) : (
                 <div className="aspect-video bg-black rounded-xl border border-surface-600 flex items-center justify-center">
                   <p className="text-slate-500">Camera preview will appear here</p>
