@@ -205,6 +205,8 @@ class DistanceEstimationModel(BaseModel):
         elif frame_idx % 25 == 0:
             logger.info("%s: Processing Frame %d", self.name, frame_idx)
 
+        start_time = time.perf_counter()
+        
         conf_thresh: float = float(kwargs.get("conf", settings.distance_confidence_threshold))
 
         # We must resize to training width (1920) before inference, then scale boxes back, 
@@ -225,8 +227,16 @@ class DistanceEstimationModel(BaseModel):
             "fov": torch.tensor(float(self.fov), dtype=torch.float32, device=self._device)
         }
 
+        # Prepare phase timing
+        prepare_time = time.perf_counter() - start_time
+        inference_start = time.perf_counter()
+
         with torch.inference_mode(), torch.autocast(device_type=self._device, enabled=self._device=="cuda"):
             output = self._model([inputs])[0]
+
+        # Inference phase timing
+        inference_time = time.perf_counter() - inference_start
+        postprocess_start = time.perf_counter()
 
         boxes = output.get("boxes", torch.tensor([], device=self._device))
         labels = output.get("labels", torch.tensor([], device=self._device))
@@ -235,6 +245,15 @@ class DistanceEstimationModel(BaseModel):
 
         # Handle empty detections
         if len(scores) == 0:
+            postprocess_time = time.perf_counter() - postprocess_start
+            total_latency = time.perf_counter() - start_time
+            fps = 1.0 / total_latency if total_latency > 0 else 0.0
+            
+            logger.info(
+                f"[DistanceEstimation] Frame {frame_idx} | Detected Objects = 0 | "
+                f"Prepare = {prepare_time*1000:.1f}ms | Inference = {inference_time*1000:.1f}ms | "
+                f"Postprocess = {postprocess_time*1000:.1f}ms | Total = {total_latency*1000:.1f}ms | FPS = {fps:.1f}"
+            )
             return frame
 
         # Threshold filter on GPU
@@ -289,6 +308,19 @@ class DistanceEstimationModel(BaseModel):
             )
             
             self._last_detection_summary[cls_name] = self._last_detection_summary.get(cls_name, 0) + 1
+            
+        postprocess_time = time.perf_counter() - postprocess_start
+        total_latency = time.perf_counter() - start_time
+        fps = 1.0 / total_latency if total_latency > 0 else 0.0
+        
+        logger.info(
+            f"[DistanceEstimation] Frame {frame_idx} | Detected Objects = {len(boxes_f)} | "
+            f"Prepare = {prepare_time*1000:.1f}ms | Inference = {inference_time*1000:.1f}ms | "
+            f"Postprocess = {postprocess_time*1000:.1f}ms | Total = {total_latency*1000:.1f}ms | FPS = {fps:.1f}"
+        )
+        
+        for cls_name, count in self._last_detection_summary.items():
+            logger.info(f"  -> {cls_name}: {count}")
 
         return annotated
 

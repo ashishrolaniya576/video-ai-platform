@@ -132,6 +132,9 @@ class LiveSession:
         self.dropped_frames = 0
         self.input_frames = 0
         
+        self.current_stage = "Initialization"
+        self.stage_start_time = time.time()
+        
         try:
             self.transition_state(SessionState.LOADING_MODELS, "Loading requested models")
             # Build active models list
@@ -317,9 +320,14 @@ class LiveSession:
         while self.is_running:
             try:
                 # Wait for a frame
+                self.current_stage = "queue.get()"
+                self.stage_start_time = time.time()
+                
+                logger.info(f"[Worker: {self.worker_uuid}] START queue.get() [QSize: {self.frame_queue.qsize()}]")
                 wait_start = time.perf_counter()
                 frame = self.frame_queue.get(timeout=0.5)
                 queue_wait_time = time.perf_counter() - wait_start
+                logger.info(f"[Worker: {self.worker_uuid}] END queue.get() | Elapsed: {queue_wait_time:.3f}s")
                 
                 if frame is None:
                     break  # Stop signal
@@ -338,10 +346,22 @@ class LiveSession:
                 try:
                     for feature_name, model in self.active_models:
                         current_model_name = model.name
+                        self.current_stage = f"model.process_frame({current_model_name})"
+                        self.stage_start_time = time.time()
+                        
+                        logger.info(f"[Worker: {self.worker_uuid}] START inference [{current_model_name}] Frame {self.frame_idx}")
+                        model_start_time = time.perf_counter()
+                        
                         if feature_name == "stabilization" and hasattr(model, "process_frame_streaming"):
                             processed_frame = model.process_frame_streaming(processed_frame, self.frame_idx, session_id=self.session_uuid)
                         else:
                             processed_frame = model.process_frame(processed_frame, self.frame_idx, request=self.request)
+                            
+                        model_elapsed = time.perf_counter() - model_start_time
+                        
+                        gpu_mem = torch.cuda.memory_allocated() / (1024*1024) if torch.cuda.is_available() else 0.0
+                        logger.info(f"[Worker: {self.worker_uuid}] END inference [{current_model_name}] Frame {self.frame_idx} | Elapsed: {model_elapsed:.3f}s | GPU Mem: {gpu_mem:.1f}MB")
+                        
                 except Exception as model_e:
                     gpu_mem = torch.cuda.memory_allocated() / (1024*1024) if torch.cuda.is_available() else 0.0
                     gpu_res = torch.cuda.memory_reserved() / (1024*1024) if torch.cuda.is_available() else 0.0
@@ -382,8 +402,18 @@ class LiveSession:
                     self.profiling["inference"].pop(0)
                 
                 # Push to output (drop if full during normal operation, but shouldn't block)
+                self.current_stage = "queue.put()"
+                self.stage_start_time = time.time()
+                
                 try:
+                    logger.info(f"[Worker: {self.worker_uuid}] START queue.put() [QSize: {self.output_queue.qsize()}]")
+                    put_start = time.perf_counter()
+                    
                     self.output_queue.put_nowait(processed_frame)
+                    
+                    put_elapsed = time.perf_counter() - put_start
+                    logger.info(f"[Worker: {self.worker_uuid}] END queue.put() | Elapsed: {put_elapsed:.3f}s")
+                    
                     if self.frame_idx == 1:
                         logger.info(f"[Worker: {self.worker_uuid}] First frame sent to output queue.")
                 except queue.Full:
@@ -523,13 +553,25 @@ class LivePipelineManager:
                             logger.critical(f"[Watchdog] Session {session_id} recovery failed. Terminating.")
                             
                     elif health == SessionHealth.WARNING:
+                        stage_duration = time.time() - session.stage_start_time
                         logger.warning(
                             f"[Watchdog] Session: {session.session_uuid} | Worker: {session.worker_uuid} | "
                             f"State: {session.current_state.name} | Health: {health.name} | "
                             f"QSize: {session.frame_queue.qsize()} | "
                             f"LastInf: {time.time() - session.last_successful_inference:.1f}s ago | "
-                            f"Processed: {session.processed_frames}"
+                            f"Processed: {session.processed_frames} | "
+                            f"Current Stage: {session.current_stage} (Running for {stage_duration:.1f}s)"
                         )
+                        
+                        # DEADLOCK DETECTION (PHASE 11)
+                        if stage_duration > 5.0 and session.worker_thread and session.worker_thread.is_alive():
+                            logger.error(f"[Watchdog] DEADLOCK DETECTED! Worker {session.worker_uuid} blocked in {session.current_stage} for {stage_duration:.1f}s.")
+                            import sys
+                            import traceback
+                            frame = sys._current_frames().get(session.worker_thread.ident)
+                            if frame:
+                                tb = "".join(traceback.format_stack(frame))
+                                logger.error(f"=== THREAD STACK DUMP for Worker {session.worker_uuid} ===\n{tb}\n=======================================================")
                         
             except Exception as e:
                 logger.error(f"Watchdog internal error: {e}")

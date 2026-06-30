@@ -60,17 +60,25 @@ class VideoTransformTrack(MediaStreamTrack):
     async def recv(self) -> VideoFrame:
         import time
         start_time = time.perf_counter()
-        logger.info(f"[WebRTC] START recv() - Session: {self.session_id}")
         
         try:
             # Get frame from incoming WebRTC stream
+            recv_start = time.perf_counter()
             frame = await self.track.recv()
+            recv_elapsed = time.perf_counter() - recv_start
 
             # Convert to BGR numpy array
             img = frame.to_ndarray(format="bgr24")
 
+            # Log frame tracking explicitly
+            if hasattr(self.pipeline_manager, 'sessions') and self.session_id in self.pipeline_manager.sessions:
+                sess = self.pipeline_manager.sessions[self.session_id]
+                logger.info(f"[WebRTC] START recv() - Session: {self.session_id} | InQ: {sess.frame_queue.qsize()} | OutQ: {sess.output_queue.qsize()}")
+
             # Process frame via LivePipelineManager
+            proc_start = time.perf_counter()
             processed_img = await self.pipeline_manager.process_frame_async(self.session_id, img)
+            proc_elapsed = time.perf_counter() - proc_start
 
             if processed_img is None:
                 # If the pipeline failed or dropped the frame, return original
@@ -81,8 +89,8 @@ class VideoTransformTrack(MediaStreamTrack):
             new_frame.pts = frame.pts
             new_frame.time_base = frame.time_base
 
-            elapsed = time.perf_counter() - start_time
-            logger.info(f"[WebRTC] END recv() - Session: {self.session_id} | Elapsed: {elapsed:.3f}s")
+            total_elapsed = time.perf_counter() - start_time
+            logger.info(f"[WebRTC] END recv() - Session: {self.session_id} | Total: {total_elapsed:.3f}s | recv(): {recv_elapsed:.3f}s | proc(): {proc_elapsed:.3f}s")
             return new_frame
         except Exception as e:
             elapsed = time.perf_counter() - start_time
