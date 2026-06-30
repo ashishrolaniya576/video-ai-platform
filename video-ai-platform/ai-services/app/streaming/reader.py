@@ -107,23 +107,23 @@ class VideoReader:
         while not self._stop_event.is_set():
             ret, frame = self._cap.read()
             if not ret:
-                # Push None to signal EOF
-                try:
-                    self._queue.put(None, timeout=1.0)
-                except queue.Full:
-                    pass
-                break
-            
-            try:
-                # Block if the queue is full, effectively backpressuring OpenCV
-                self._queue.put(frame, timeout=1.0)
-            except queue.Full:
-                # If it times out, continue the loop (checking stop_event)
-                if not self._stop_event.is_set():
+                # Push None to signal EOF, guaranteeing it gets pushed even if queue is full
+                while not self._stop_event.is_set():
                     try:
-                        self._queue.put(frame, timeout=1.0)
+                        self._queue.put(None, timeout=0.5)
+                        break
                     except queue.Full:
                         pass
+                break
+            
+            # Block if the queue is full, effectively backpressuring OpenCV
+            # Loop ensures we never drop a frame on timeout
+            while not self._stop_event.is_set():
+                try:
+                    self._queue.put(frame, timeout=0.5)
+                    break
+                except queue.Full:
+                    pass
                         
     def release(self) -> None:
         """Release the underlying VideoCapture handle and stop the thread."""

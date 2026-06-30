@@ -19,7 +19,7 @@ import cv2
 import numpy as np
 
 
-def make_synthetic_foggy_video(path: Path, num_frames: int = 10, w: int = 256, h: int = 256) -> None:
+def make_synthetic_foggy_video(path: Path, num_frames: int = 144, w: int = 848, h: int = 480) -> None:
     """Create a short synthetic video with low contrast/fog for testing."""
     rng = np.random.default_rng(seed=42)
     writer = cv2.VideoWriter(
@@ -136,7 +136,7 @@ def main() -> None:
     if args.synthetic:
         video_path = ai_services_dir / "temp" / "synthetic_fog.mp4"
         video_path.parent.mkdir(parents=True, exist_ok=True)
-        make_synthetic_foggy_video(video_path, num_frames=3)
+        make_synthetic_foggy_video(video_path, num_frames=144)
     else:
         video_path = args.video.resolve()
         if not video_path.exists():
