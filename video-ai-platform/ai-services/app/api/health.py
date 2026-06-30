@@ -16,7 +16,7 @@ import torch
 
 from app.utils.logger import get_logger
 from app.pipeline.live_pipeline import GpuHealthState
-from app.pipeline.model_manager import model_manager
+from app.pipeline.model_manager import model_manager, BackendState
 
 logger = get_logger(__name__)
 
