@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from collections import defaultdict
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict
 
@@ -68,7 +69,7 @@ class PromptIRWrapper(pl.LightningModule):
     def __init__(self, net_class):
         super().__init__()
         self.net = net_class(decoder=True)
-        
+
     def forward(self, x):
         return self.net(x)
 
@@ -87,12 +88,58 @@ class VideoVisibilityModel(BaseModel):
         self.alpha = settings.promptir_contrast_alpha
         self.beta = settings.promptir_contrast_beta
         self.clahe_clip = settings.promptir_clahe_clip
+        self._tile_batch_size = max(1, min(8, settings.promptir_tile_batch_size))
+        self._enable_amp = settings.promptir_enable_amp
+        self._enable_channels_last = settings.promptir_enable_channels_last
+        self._enable_compile = settings.promptir_enable_compile
+        self._profile = settings.promptir_profile
         
         # GPU Optimizations
         self._gaussian_cache: dict[int, torch.Tensor] = {}
         self._tile_buffers: dict[tuple, tuple[torch.Tensor, torch.Tensor]] = {}
-        # Mini-batch size for tiles (increases GPU utilization drastically)
-        self._batch_size = 4 
+        self._timing_stats: Dict[str, List[float]] = {"prepare": [], "infer": [], "postprocess": []}
+
+    def _apply_model_channels_last(self, model: PromptIRWrapper) -> None:
+        """Convert only rank-4 parameters to channels_last; disable flag on failure."""
+        if not self._enable_channels_last:
+            return
+        try:
+            for param in model.parameters():
+                if param.ndim == 4:
+                    param.data = param.data.to(memory_format=torch.channels_last)
+        except (TypeError, RuntimeError) as exc:
+            logger.debug(
+                "%s: channels_last not applied to model weights (%s); continuing in default layout",
+                self.name,
+                exc,
+            )
+            self._enable_channels_last = False
+
+    def _to_channels_last_nchw(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Apply channels_last only to rank-4 NCHW tensors; never touch CHW inputs."""
+        if not self._enable_channels_last or tensor.device.type != "cuda":
+            return tensor
+        if tensor.ndim != 4:
+            return tensor
+        try:
+            return tensor.to(memory_format=torch.channels_last)
+        except (TypeError, RuntimeError) as exc:
+            logger.debug(
+                "%s: channels_last skipped for input tensor (%s); continuing in default layout",
+                self.name,
+                exc,
+            )
+            self._enable_channels_last = False
+            return tensor
+
+    def _run_model_inference(self, batch: torch.Tensor, device: torch.device) -> torch.Tensor:
+        """Run PromptIR on a rank-4 batch tensor with optional AMP and channels_last."""
+        batch = self._to_channels_last_nchw(batch)
+        if device.type == "cuda" and self._enable_amp:
+            with torch.inference_mode(), torch.autocast(device_type=device.type, dtype=torch.float16):
+                return self._model(batch)
+        with torch.inference_mode():
+            return self._model(batch)
 
     def _get_gaussian_window(self, size: int, device: torch.device) -> torch.Tensor:
         """Fetch or create a cached 2D Gaussian window on the GPU."""
@@ -151,12 +198,77 @@ class VideoVisibilityModel(BaseModel):
         except Exception as e:
             raise RuntimeError(f"Failed to load checkpoint for {self.name}: {e}")
 
+        if torch_device.type == "cuda":
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            torch.set_float32_matmul_precision("high")
+
         model.to(torch_device)
+        if torch_device.type == "cuda":
+            self._apply_model_channels_last(model)
         model.eval()
+
+        if torch_device.type == "cuda" and self._enable_compile:
+            try:
+                model = torch.compile(model, mode="reduce-overhead", fullgraph=False)
+                logger.info("%s: enabled torch.compile for PromptIR inference.", self.name)
+            except Exception as exc:
+                logger.warning("%s: torch.compile disabled for PromptIR due to %s", self.name, exc)
 
         self._model = model
         self._loaded = True
         logger.info("%s: Checkpoint Loaded. Model loaded successfully.", self.name)
+
+    def _prepare_input_tensor(self, frame: np.ndarray, device: torch.device | None = None) -> torch.Tensor:
+        """Convert a BGR numpy frame into a compact CHW float tensor on the target device."""
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        tensor = torch.from_numpy(frame_rgb).permute(2, 0, 1).contiguous().to(torch.float32)
+        tensor.div_(255.0)
+        if device is not None:
+            tensor = tensor.to(device=device, non_blocking=True)
+        return tensor
+
+    def _apply_gpu_postprocess(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Apply contrast and sharpening on GPU using PyTorch kernels."""
+        tensor = tensor.clamp(0.0, 1.0)
+        tensor = tensor.mul(self.alpha).add(self.beta / 255.0)
+        tensor = tensor.clamp(0.0, 1.0)
+        kernel = torch.tensor(
+            [[[[0.0, -0.5, 0.0], [-0.5, 3.0, -0.5], [0.0, -0.5, 0.0]]]],
+            device=tensor.device,
+            dtype=tensor.dtype,
+        )
+        # Apply the same 3x3 sharpen filter to each channel independently.
+        sharpened = F.conv2d(
+            tensor.unsqueeze(0),
+            kernel.repeat(tensor.size(0), 1, 1, 1),
+            groups=tensor.size(0),
+            padding=1,
+        )
+        return sharpened.squeeze(0).clamp(0.0, 1.0)
+
+    def _postprocess_restored(self, restored_tensor: torch.Tensor, device: torch.device | None = None) -> np.ndarray:
+        """Convert a restored CHW tensor back into a BGR uint8 numpy frame."""
+        tensor = restored_tensor.detach()
+        if device is not None and device.type == "cuda" and self._enable_amp:
+            tensor = self._apply_gpu_postprocess(tensor)
+        else:
+            tensor = tensor.clamp(0.0, 1.0)
+
+        rgb = tensor.permute(1, 2, 0).contiguous()
+        rgb = rgb.mul(255.0).round().to(torch.uint8)
+        if rgb.device.type != "cpu":
+            rgb = rgb.cpu()
+        frame_rgb = rgb.numpy()
+        return cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+
+    def _record_timing(self, stage: str, elapsed_ms: float) -> None:
+        if not self._profile:
+            return
+        self._timing_stats[stage].append(elapsed_ms)
+        if len(self._timing_stats[stage]) > 200:
+            self._timing_stats[stage] = self._timing_stats[stage][-200:]
 
     def process_frame(
         self,
@@ -166,48 +278,45 @@ class VideoVisibilityModel(BaseModel):
     ) -> np.ndarray:
         self._assert_loaded()
 
+        torch_device = torch.device(self._device)
         if frame_idx % 50 == 0:
             logger.info("%s: Processing frame %d", self.name, frame_idx)
 
-        # OpenCV Frame -> RGB -> Tensor (optimized manual conversion)
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        img_tensor = torch.from_numpy(frame_rgb).permute(2, 0, 1).float() / 255.0
-        
-        # PromptIR Tiled Inference
-        logger.debug("%s: Tile Processing", self.name)
-        torch_device = torch.device(self._device)
+        prepare_start = time.perf_counter()
+        img_tensor = self._prepare_input_tensor(frame, torch_device)
+        self._record_timing("prepare", (time.perf_counter() - prepare_start) * 1000.0)
+
+        infer_start = time.perf_counter()
         restored_tensor = self._infer_tiled(img_tensor, self.tile_size, self.tile_overlap, torch_device)
-        
-        # Convert back to numpy array (RGB)
-        restored_rgb = (restored_tensor.permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
-        
-        # RGB -> BGR for postprocessing
-        frame = cv2.cvtColor(restored_rgb, cv2.COLOR_RGB2BGR)
-        
-        # Contrast Enhancement
-        frame = cv2.convertScaleAbs(frame, alpha=self.alpha, beta=self.beta)
-        
-        # CLAHE
-        logger.debug("%s: CLAHE", self.name)
-        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=self.clahe_clip, tileGridSize=(8,8))
-        l = clahe.apply(l)
-        frame = cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
-        
-        # Sharpening
-        logger.debug("%s: Sharpening", self.name)
-        kernel = np.array([[ 0, -0.5,  0], [-0.5, 3, -0.5], [ 0, -0.5,  0]])
-        frame = cv2.filter2D(frame, -1, kernel)
-        
+        self._record_timing("infer", (time.perf_counter() - infer_start) * 1000.0)
+
+        postprocess_start = time.perf_counter()
+        frame = self._postprocess_restored(restored_tensor, torch_device)
+        self._record_timing("postprocess", (time.perf_counter() - postprocess_start) * 1000.0)
+
+        if self._profile and frame_idx % 100 == 0:
+            self._log_timing_summary(frame_idx)
+
         return frame
+
+    def _log_timing_summary(self, frame_idx: int) -> None:
+        if not self._profile:
+            return
+        totals = {name: sum(values) / max(1, len(values)) for name, values in self._timing_stats.items() if values}
+        logger.info(
+            "%s: frame %d timing stats (ms) prepare=%.2f infer=%.2f postprocess=%.2f",
+            self.name,
+            frame_idx,
+            totals.get("prepare", 0.0),
+            totals.get("infer", 0.0),
+            totals.get("postprocess", 0.0),
+        )
 
     def _infer_tiled(self, img_tensor: torch.Tensor, tile: int, overlap: int, device: torch.device) -> torch.Tensor:
         """Tiled inference deeply optimized for GPU accumulation and batching."""
         c, h, w = img_tensor.shape
         
-        # Pre-allocate output and weight on the GPU directly
-        img_tensor_gpu = img_tensor.to(device, non_blocking=True)
+        img_tensor_gpu = img_tensor.to(device=device, non_blocking=True)
         shape_key = (c, h, w)
         if shape_key not in self._tile_buffers:
             self._tile_buffers[shape_key] = (
@@ -217,23 +326,20 @@ class VideoVisibilityModel(BaseModel):
         output, weight = self._tile_buffers[shape_key]
         output.zero_()
         weight.zero_()
-        
+
         step = tile - overlap
         ys = sorted(set(max(0, y) for y in list(range(0, h - tile + 1, step)) + [h - tile]))
         xs = sorted(set(max(0, x) for x in list(range(0, w - tile + 1, step)) + [w - tile]))
-        
+
         if h <= tile and w <= tile:
             patch, _ = pad_to_multiple(img_tensor_gpu, 8)
-            with torch.inference_mode(), torch.autocast(device_type=device.type, enabled=device.type=="cuda"):
-                out = self._model(patch.unsqueeze(0)).squeeze(0)
-            return out[:, :h, :w].clamp(0, 1).cpu()
-            
+            out = self._run_model_inference(patch.unsqueeze(0), device).squeeze(0)
+            return out[:, :h, :w].clamp(0, 1)
+
         blend = self._get_gaussian_window(tile, device)
-        
-        # Collect patches for batching
+
         patches = []
         coords = []
-        
         for y in ys:
             y2 = min(y + tile, h)
             for x in xs:
@@ -243,25 +349,27 @@ class VideoVisibilityModel(BaseModel):
                 patches.append(patch_padded)
                 coords.append((y, y2, x, x2))
 
-        # Process in mini-batches
-        for i in range(0, len(patches), self._batch_size):
-            batch_patches = torch.stack(patches[i:i+self._batch_size])
-            with torch.inference_mode(), torch.autocast(device_type=device.type, enabled=device.type=="cuda"):
-                batch_restored = self._model(batch_patches)
-            
-            for j in range(batch_patches.size(0)):
-                y, y2, x, x2 = coords[i + j]
-                restored = batch_restored[j, :, :y2-y, :x2-x]
-                bh, bw = y2-y, x2-x
-                w_patch = blend[:bh, :bw]
-                
-                # In-place accumulation on GPU
-                output[:, y:y2, x:x2].add_(restored * w_patch)
-                weight[:, y:y2, x:x2].add_(w_patch)
-                
+        shape_groups: dict[tuple[int, ...], list[tuple[torch.Tensor, tuple[int, int, int, int]]]] = defaultdict(list)
+        for patch, coord in zip(patches, coords):
+            shape_groups[patch.shape].append((patch, coord))
+
+        for group_items in shape_groups.values():
+            group_patches = [patch for patch, _ in group_items]
+            group_coords = [coord for _, coord in group_items]
+            for i in range(0, len(group_patches), self._tile_batch_size):
+                batch_patches = torch.stack(group_patches[i:i + self._tile_batch_size])
+                batch_restored = self._run_model_inference(batch_patches, device)
+
+                for j in range(batch_patches.size(0)):
+                    y, y2, x, x2 = group_coords[i + j]
+                    restored = batch_restored[j, :, :y2 - y, :x2 - x]
+                    bh, bw = y2 - y, x2 - x
+                    w_patch = blend[:bh, :bw]
+                    output[:, y:y2, x:x2].add_(restored * w_patch)
+                    weight[:, y:y2, x:x2].add_(w_patch)
+
         output.div_(weight.clamp(min=1e-6))
-        # Move final fully blended frame to CPU
-        return output.clamp(0, 1).cpu()
+        return output.clamp(0, 1)
 
     def cleanup(self) -> None:
         """Release GPU memory and reset state."""

@@ -68,6 +68,20 @@ class BaseModel(ABC):
             RuntimeError: if load_model() has not been called yet.
         """
 
+    def process_frames(
+        self,
+        frames: List[np.ndarray],
+        frame_indices: List[int] | None = None,
+        **kwargs: object,
+    ) -> List[np.ndarray]:
+        """Default batch implementation that falls back to per-frame processing."""
+        if frame_indices is None:
+            frame_indices = list(range(len(frames)))
+        return [
+            self.process_frame(frame, frame_idx, **kwargs)
+            for frame, frame_idx in zip(frames, frame_indices)
+        ]
+
     @abstractmethod
     def cleanup(self) -> None:
         """

@@ -208,6 +208,35 @@ class PipelineManager:
                 
                 out_h, out_w = dry_frame.shape[:2]
 
+                heavy_stage_index = next(
+                    (idx for idx, (feature_name, _) in enumerate(active_models) if feature_name == "heavy_rain_removal"),
+                    None,
+                )
+                prefix_models = active_models[:heavy_stage_index] if heavy_stage_index is not None else active_models
+                suffix_models = active_models[heavy_stage_index + 1:] if heavy_stage_index is not None else []
+                heavy_model = None
+                if heavy_stage_index is not None:
+                    _, heavy_model = active_models[heavy_stage_index]
+                batch_size = max(1, getattr(heavy_model, "_batch_size", settings.heavy_rain_batch_size)) if heavy_model is not None else 1
+                pending_frames: List[np.ndarray] = []
+                pending_indices: List[int] = []
+
+                def flush_pending_heavy_batch() -> None:
+                    nonlocal pending_frames, pending_indices
+                    if not pending_frames:
+                        return
+                    if heavy_model is not None and hasattr(heavy_model, "process_frames") and batch_size > 1:
+                        processed_batch = heavy_model.process_frames(pending_frames, pending_indices)
+                    else:
+                        processed_batch = pending_frames
+                    for frame, frame_idx in zip(processed_batch, pending_indices):
+                        current_frame = frame
+                        for _, model in suffix_models:
+                            current_frame = model.process_frame(current_frame, frame_idx)
+                        writer.write(current_frame)
+                    pending_frames = []
+                    pending_indices = []
+
                 with VideoWriter(
                     output_path, 
                     fps=current_fps, 
@@ -228,13 +257,24 @@ class PipelineManager:
                             new_h = int(frame.shape[0] * scale)
                             frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-                        for feature_name, model in active_models:
-                            frame = model.process_frame(frame, idx)
-                        writer.write(frame)
+                        if heavy_stage_index is not None:
+                            current_frame = frame
+                            for _, model in prefix_models:
+                                current_frame = model.process_frame(current_frame, idx)
+                            pending_frames.append(current_frame)
+                            pending_indices.append(idx)
+                            if len(pending_frames) >= batch_size:
+                                flush_pending_heavy_batch()
+                        else:
+                            for feature_name, model in active_models:
+                                frame = model.process_frame(frame, idx)
+                            writer.write(frame)
 
                         if total_frames > 0 and idx % 10 == 0:
                             pct = 10 + int((idx / total_frames) * 90)
                             GLOBAL_PROGRESS[request.video_path] = min(100, pct)
+
+                    flush_pending_heavy_batch()
 
                 # ── Extract Optional Results ──────────────────────────────────────
                 try:

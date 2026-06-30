@@ -69,6 +69,13 @@ class Settings(BaseSettings):
         default="https://www.dropbox.com/s/h8x6xl6epc45ngn/HeavyRain-stage2-2019-05-11-76_ckpt.pth.tar?dl=1",
         alias="HEAVY_RAIN_CHECKPOINT_URL",
     )
+    heavy_rain_batch_size: int = Field(default=4, alias="HEAVY_RAIN_BATCH_SIZE")
+    heavy_rain_enable_compile: bool = Field(default=True, alias="HEAVY_RAIN_ENABLE_COMPILE")
+    heavy_rain_compile_mode: Literal["reduce-overhead", "max-autotune"] = Field(
+        default="reduce-overhead",
+        alias="HEAVY_RAIN_COMPILE_MODE",
+    )
+    heavy_rain_profile: bool = Field(default=True, alias="HEAVY_RAIN_PROFILE")
 
     # ── Video Visibility (PromptIR) ───────────────────────────
     promptir_checkpoint: Path = Field(
@@ -83,9 +90,14 @@ class Settings(BaseSettings):
     )
     promptir_tile_size: int = Field(default=512, alias="PROMPTIR_TILE_SIZE")
     promptir_tile_overlap: int = Field(default=32, alias="PROMPTIR_TILE_OVERLAP")
+    promptir_tile_batch_size: int = Field(default=4, alias="PROMPTIR_TILE_BATCH_SIZE")
     promptir_contrast_alpha: float = Field(default=1.3, alias="PROMPTIR_CONTRAST_ALPHA")
     promptir_contrast_beta: float = Field(default=10.0, alias="PROMPTIR_CONTRAST_BETA")
     promptir_clahe_clip: float = Field(default=1.5, alias="PROMPTIR_CLAHE_CLIP")
+    promptir_enable_amp: bool = Field(default=True, alias="PROMPTIR_ENABLE_AMP")
+    promptir_enable_channels_last: bool = Field(default=True, alias="PROMPTIR_ENABLE_CHANNELS_LAST")
+    promptir_enable_compile: bool = Field(default=True, alias="PROMPTIR_ENABLE_COMPILE")
+    promptir_profile: bool = Field(default=True, alias="PROMPTIR_PROFILE")
 
     # ── Distance Estimation ───────────────────────────────────
     distance_weights_path: Path = Field(
