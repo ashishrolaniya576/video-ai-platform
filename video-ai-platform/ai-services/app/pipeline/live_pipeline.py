@@ -618,9 +618,6 @@ class LivePipelineManager:
                     return
             
             session.change_state_unsafe(new_state, reason)
-            
-            if new_state == SessionState.WORKER_STARTED:
-                session.start_worker()
 
     def _watchdog_loop(self):
         """Dedicated Watchdog thread to monitor all active sessions."""
@@ -685,8 +682,9 @@ class LivePipelineManager:
         
         self.publish_event(session_id, SessionEvent.INITIALIZE, "Session created and initializing")
         
-        # Start worker thread will be triggered dynamically by FRAME_ENQUEUED
+        # Start worker thread immediately
         session.start()
+        session.start_worker()
 
     def stop_session(self, session_id: str):
         if session_id in self.sessions:
