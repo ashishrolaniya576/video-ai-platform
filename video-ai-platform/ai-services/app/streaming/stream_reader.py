@@ -2,11 +2,15 @@ import threading
 import queue
 import time
 import uuid
+import os
 from abc import ABC, abstractmethod
 from typing import Optional
 
 import cv2
 import numpy as np
+
+# Force OpenCV FFmpeg backend to use TCP for RTSP streams to bypass UDP packet drops in Docker/WSL
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
 from app.utils.logger import get_logger
 from app.pipeline.live_pipeline import LivePipelineManager, LiveSession, SessionState, SessionEvent
@@ -67,6 +71,11 @@ class URLStreamReader(BaseStreamReader):
             self._cap.release()
             
         stream_url = self.url
+        
+        # Translate localhost to host.docker.internal for containerized environments
+        if "localhost" in stream_url or "127.0.0.1" in stream_url:
+            stream_url = stream_url.replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
+            
         if "youtube.com" in self.url or "youtu.be" in self.url:
             # Skip yt-dlp logging to avoid state machine breakage. Handled dynamically.
             try:
