@@ -114,7 +114,7 @@ def classify_cuda_error(e: Exception) -> CudaErrorCategory:
 
 class LiveSession:
     """Manages the state and queues for a single live streaming session."""
-    def __init__(self, session_id: str, request: dict, models: Dict[str, BaseModel], model_order: List[str], event_callback=None):
+    def __init__(self, session_id: str, request: dict, models: Dict[str, BaseModel], model_order: List[str], event_callback=None, inference_lock=None):
         # Identifiers
         self.session_id = session_id
         self.session_uuid = str(uuid.uuid4())
@@ -140,6 +140,7 @@ class LiveSession:
         self.models = models
         self.model_order = model_order
         self.state_lock = threading.Lock()
+        self.inference_lock = inference_lock or threading.Lock()
         self.event_callback = event_callback
         
         self.profiling = {
@@ -403,8 +404,9 @@ class LiveSession:
                 current_model_name = "None"
                 
                 try:
-                    for feature_name, model in self.active_models:
-                        current_model_name = model.name
+                    with self.inference_lock:
+                        for feature_name, model in self.active_models:
+                            current_model_name = model.name
                         self.heartbeat(f"model.process_frame({current_model_name})")
                         
                         logger.info(f"[Worker: {self.worker_uuid}] START inference [{current_model_name}] Frame {self.frame_idx}")
@@ -591,6 +593,7 @@ class LivePipelineManager:
     def __init__(self, models: Dict[str, BaseModel]) -> None:
         self._models = models
         self.sessions: Dict[str, LiveSession] = {}
+        self.inference_lock = threading.Lock()
         
         # Start Watchdog
         self._watchdog_running = True
@@ -677,7 +680,7 @@ class LivePipelineManager:
             logger.info(f"Session {session_id} already running.")
             return
             
-        session = LiveSession(session_id, request, self._models, ["stabilization", "heavy_rain_removal", "video_visibility", "distance_estimation"], self.publish_event)
+        session = LiveSession(session_id, request, self._models, ["stabilization", "heavy_rain_removal", "video_visibility", "distance_estimation"], self.publish_event, self.inference_lock)
         self.sessions[session_id] = session
         
         self.publish_event(session_id, SessionEvent.INITIALIZE, "Session created and initializing")
@@ -722,7 +725,21 @@ class LivePipelineManager:
         try:
             # We await slightly to allow the background thread to run
             await asyncio.sleep(0.001)
-            # Try to get the latest processed frame
+            
+            # If we don't have a cached frame yet, wait up to 500ms for the FIRST frame
+            if session.last_processed_frame is None:
+                for _ in range(50):
+                    try:
+                        item = session.output_queue.get_nowait()
+                        if isinstance(item, tuple) and len(item) == 2:
+                            session.last_processed_frame = item[1]
+                            return item[1]
+                        session.last_processed_frame = item
+                        return item
+                    except queue.Empty:
+                        await asyncio.sleep(0.01)
+                        
+            # Normal polling for subsequent frames (maintains 30 FPS WebRTC while AI runs at 10 FPS)
             item = session.output_queue.get_nowait()
             
             if isinstance(item, tuple) and len(item) == 2:
