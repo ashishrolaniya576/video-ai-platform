@@ -56,6 +56,15 @@ class VideoTransformTrack(MediaStreamTrack):
         
         # Start the pipeline manager for this session
         self.pipeline_manager.start_session(self.session_id, self.request)
+        
+        # WebRTC tracks are already connected and decoding. Fast-forward state machine to start worker.
+        pm = self.pipeline_manager
+        pm.publish_event(self.session_id, SessionEvent.STREAM_OPEN_START)
+        pm.publish_event(self.session_id, SessionEvent.STREAM_OPEN_SUCCESS)
+        pm.publish_event(self.session_id, SessionEvent.DECODER_START)
+        pm.publish_event(self.session_id, SessionEvent.FRAME_DECODED)
+        pm.publish_event(self.session_id, SessionEvent.PIPELINE_START)
+        pm.publish_event(self.session_id, SessionEvent.WORKER_STARTING)
 
     async def recv(self) -> VideoFrame:
         import time

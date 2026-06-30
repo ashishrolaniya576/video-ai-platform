@@ -68,8 +68,7 @@ class URLStreamReader(BaseStreamReader):
             
         stream_url = self.url
         if "youtube.com" in self.url or "youtu.be" in self.url:
-            if session:
-                self.pipeline_manager.publish_event(self.session_id, SessionEvent.STREAM_RESOLVE_START, "Resolving YouTube direct URL via yt-dlp")
+            # Skip yt-dlp logging to avoid state machine breakage. Handled dynamically.
             try:
                 import yt_dlp
                 ydl_opts = {'format': 'best', 'quiet': True}
@@ -97,7 +96,11 @@ class URLStreamReader(BaseStreamReader):
         self._cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
         self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 3) # Small buffer for low latency
         
-        return self._cap.isOpened()
+        is_opened = self._cap.isOpened()
+        if is_opened and session and session.current_state != SessionState.FAILED:
+            self.pipeline_manager.publish_event(self.session_id, SessionEvent.STREAM_OPEN_SUCCESS, "FFmpeg Stream Opened")
+            
+        return is_opened
 
     def _read_loop(self):
         try:
@@ -124,6 +127,8 @@ class URLStreamReader(BaseStreamReader):
                     else:
                         logger.info(f"[URLStreamReader] Successfully connected to {self.url}")
                         retries = 0
+                        if session and session.current_state == SessionState.STREAM_CONNECTED:
+                            self.pipeline_manager.publish_event(self.session_id, SessionEvent.DECODER_START)
 
                 # Read frame
                 ret, frame = self._cap.read()
@@ -134,8 +139,10 @@ class URLStreamReader(BaseStreamReader):
                     time.sleep(self.reconnect_delay)
                     continue
 
-                if session.current_state == SessionState.OPENING_STREAM:
+                if session.current_state == SessionState.DECODER_READY:
                     self.pipeline_manager.publish_event(self.session_id, SessionEvent.FRAME_DECODED, "First frame decoded")
+                    self.pipeline_manager.publish_event(self.session_id, SessionEvent.PIPELINE_START)
+                    self.pipeline_manager.publish_event(self.session_id, SessionEvent.WORKER_STARTING)
 
                 session.input_frames += 1
 
@@ -151,10 +158,7 @@ class URLStreamReader(BaseStreamReader):
                     frame_id = str(uuid.uuid4())
                     session.frame_queue.put((frame_id, frame), timeout=0.1)
                     
-                    # First frame successfully enqueued, transition to STREAMING (or FIRST_FRAME_ENQUEUED which starts worker)
-                    if session.current_state in [SessionState.FIRST_FRAME_DECODED]:
-                        self.pipeline_manager.publish_event(self.session_id, SessionEvent.FRAME_ENQUEUED, "First frame enqueued")
-                        
+                    # First frame successfully enqueued
                 except queue.Full:
                     pass
                     

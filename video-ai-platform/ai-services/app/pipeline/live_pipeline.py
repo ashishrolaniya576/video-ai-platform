@@ -20,29 +20,26 @@ logger = get_logger(__name__)
 class SessionState(Enum):
     CREATED = "CREATED"
     INITIALIZING = "INITIALIZING"
-    RESOLVING_STREAM = "RESOLVING_STREAM"
     OPENING_STREAM = "OPENING_STREAM"
-    FIRST_FRAME_DECODED = "FIRST_FRAME_DECODED"
-    FIRST_FRAME_ENQUEUED = "FIRST_FRAME_ENQUEUED"
-    READY = "READY"
-    WORKER_STARTED = "WORKER_STARTED"
-    FIRST_FRAME_PROCESSED = "FIRST_FRAME_PROCESSED"
-    STREAMING = "STREAMING"
-    RECOVERING = "RECOVERING"
-    FAILED = "FAILED"
+    STREAM_CONNECTED = "STREAM_CONNECTED"
+    DECODER_READY = "DECODER_READY"
+    FIRST_FRAME_RECEIVED = "FIRST_FRAME_RECEIVED"
+    PIPELINE_READY = "PIPELINE_READY"
+    STARTING_WORKER = "STARTING_WORKER"
+    RUNNING = "RUNNING"
     STOPPING = "STOPPING"
-    TERMINATED = "TERMINATED"
+    STOPPED = "STOPPED"
+    FAILED = "FAILED"
 
 class SessionEvent(Enum):
     INITIALIZE = "INITIALIZE"
-    STREAM_RESOLVE_START = "STREAM_RESOLVE_START"
     STREAM_OPEN_START = "STREAM_OPEN_START"
+    STREAM_OPEN_SUCCESS = "STREAM_OPEN_SUCCESS"
+    DECODER_START = "DECODER_START"
     FRAME_DECODED = "FRAME_DECODED"
-    FRAME_ENQUEUED = "FRAME_ENQUEUED"
+    PIPELINE_START = "PIPELINE_START"
     WORKER_STARTING = "WORKER_STARTING"
-    FRAME_PROCESSED = "FRAME_PROCESSED"
-    ENTER_STREAMING = "ENTER_STREAMING"
-    RECOVERY_START = "RECOVERY_START"
+    WORKER_STARTED = "WORKER_STARTED"
     ERROR_OCCURRED = "ERROR_OCCURRED"
     STOP_REQUESTED = "STOP_REQUESTED"
     CLEANUP_COMPLETE = "CLEANUP_COMPLETE"
@@ -65,17 +62,16 @@ class GpuHealthState(Enum):
 # Event transition map for centralized ownership
 STATE_MACHINE = {
     SessionState.CREATED: {SessionEvent.INITIALIZE: SessionState.INITIALIZING},
-    SessionState.INITIALIZING: {SessionEvent.STREAM_RESOLVE_START: SessionState.RESOLVING_STREAM},
-    SessionState.RESOLVING_STREAM: {SessionEvent.STREAM_OPEN_START: SessionState.OPENING_STREAM},
-    SessionState.OPENING_STREAM: {SessionEvent.FRAME_DECODED: SessionState.FIRST_FRAME_DECODED},
-    SessionState.FIRST_FRAME_DECODED: {SessionEvent.FRAME_ENQUEUED: SessionState.FIRST_FRAME_ENQUEUED},
-    SessionState.FIRST_FRAME_ENQUEUED: {SessionEvent.WORKER_STARTING: SessionState.WORKER_STARTED},
-    SessionState.WORKER_STARTED: {SessionEvent.FRAME_PROCESSED: SessionState.FIRST_FRAME_PROCESSED},
-    SessionState.FIRST_FRAME_PROCESSED: {SessionEvent.ENTER_STREAMING: SessionState.STREAMING},
-    SessionState.STREAMING: {SessionEvent.RECOVERY_START: SessionState.RECOVERING},
-    SessionState.RECOVERING: {SessionEvent.ENTER_STREAMING: SessionState.STREAMING},
-    SessionState.STOPPING: {SessionEvent.CLEANUP_COMPLETE: SessionState.TERMINATED},
-    SessionState.FAILED: {SessionEvent.STOP_REQUESTED: SessionState.STOPPING, SessionEvent.CLEANUP_COMPLETE: SessionState.TERMINATED},
+    SessionState.INITIALIZING: {SessionEvent.STREAM_OPEN_START: SessionState.OPENING_STREAM},
+    SessionState.OPENING_STREAM: {SessionEvent.STREAM_OPEN_SUCCESS: SessionState.STREAM_CONNECTED},
+    SessionState.STREAM_CONNECTED: {SessionEvent.DECODER_START: SessionState.DECODER_READY},
+    SessionState.DECODER_READY: {SessionEvent.FRAME_DECODED: SessionState.FIRST_FRAME_RECEIVED},
+    SessionState.FIRST_FRAME_RECEIVED: {SessionEvent.PIPELINE_START: SessionState.PIPELINE_READY},
+    SessionState.PIPELINE_READY: {SessionEvent.WORKER_STARTING: SessionState.STARTING_WORKER},
+    SessionState.STARTING_WORKER: {SessionEvent.WORKER_STARTED: SessionState.RUNNING},
+    SessionState.RUNNING: {},
+    SessionState.STOPPING: {SessionEvent.CLEANUP_COMPLETE: SessionState.STOPPED},
+    SessionState.FAILED: {SessionEvent.STOP_REQUESTED: SessionState.STOPPING, SessionEvent.CLEANUP_COMPLETE: SessionState.STOPPED},
 }
 
 # Define valid fallback events that can interrupt standard flow
@@ -621,6 +617,10 @@ class LivePipelineManager:
                     return
             
             session.change_state_unsafe(new_state, reason)
+            
+            if new_state == SessionState.STARTING_WORKER:
+                session.start_worker()
+                self.publish_event(session_id, SessionEvent.WORKER_STARTED, "Worker initialized")
 
     def _watchdog_loop(self):
         """Dedicated Watchdog thread to monitor all active sessions."""
@@ -685,9 +685,8 @@ class LivePipelineManager:
         
         self.publish_event(session_id, SessionEvent.INITIALIZE, "Session created and initializing")
         
-        # Start worker thread immediately
+        # Start worker thread will be triggered dynamically by WORKER_STARTING event
         session.start()
-        session.start_worker()
 
     def stop_session(self, session_id: str):
         if session_id in self.sessions:

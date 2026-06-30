@@ -41,6 +41,45 @@ def get_live_pipeline(request: Request) -> LivePipelineManager:
     return pipeline
 
 
+def _probe_stream_sync(url: str):
+    """Synchronous probing of an RTSP/HTTP stream using OpenCV."""
+    stream_url = url
+    if "youtube.com" in url or "youtu.be" in url:
+        try:
+            import yt_dlp
+            ydl_opts = {'format': 'best', 'quiet': True}
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                stream_url = info['url']
+        except Exception as e:
+            return False, {"error": f"YouTube URL resolution failed: {e}"}
+
+    cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
+    if not cap.isOpened():
+        return False, {"error": "Connection refused or stream unavailable"}
+        
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+    h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    
+    # Read one frame to ensure it's decodable
+    ret, frame = cap.read()
+    cap.release()
+    
+    if not ret:
+        return False, {"error": "Stream connected but no frames could be decoded"}
+        
+    return True, {
+        "fps": fps,
+        "width": w,
+        "height": h,
+        "codec": "H264/FFmpeg"
+    }
+
+async def probe_rtsp_stream(url: str):
+    return await asyncio.to_thread(_probe_stream_sync, url)
+
+
 @router.post("/live/start_url")
 async def start_url_stream(body: URLStreamRequestSchema, request: Request):
     """
@@ -65,6 +104,20 @@ async def start_url_stream(body: URLStreamRequestSchema, request: Request):
         "video_visibility": body.videoVisibility,
         "distance_estimation": body.distanceEstimation,
     }
+
+    # PROBE STREAM FIRST (Phase 4 requirement)
+    logger.info(f"Probing stream URL: {body.url}")
+    is_valid, diagnostic = await probe_rtsp_stream(body.url)
+    
+    if not is_valid:
+        error_msg = diagnostic.get("error", "Unknown stream error")
+        logger.error(f"Stream validation failed for {body.url}: {error_msg}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Stream validation failed: {error_msg}"
+        )
+        
+    logger.info(f"Stream validated successfully: {diagnostic}")
 
     try:
         # Start AI pipeline session
