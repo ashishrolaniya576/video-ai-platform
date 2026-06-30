@@ -26,7 +26,7 @@ function createLog(message, level = 'info') {
   return { timestamp, message, level };
 }
 
-function Dashboard() {
+function Dashboard({ backendReady, backendStateInfo }) {
   const pollIntervalRef = useRef(null);
   const unsubscribeRef = useRef(null);
 
@@ -88,32 +88,7 @@ function Dashboard() {
   const [liveInputType, setLiveInputType] = useState('webcam'); // 'webcam' or 'url'
   const [liveUrl, setLiveUrl] = useState('');
 
-  // ── Backend Readiness State ───────────────────────────────────────────────
-  const [backendReady, setBackendReady] = useState(false);
-  const [backendStateInfo, setBackendStateInfo] = useState(null);
-
-  // Poll for backend readiness
-  useEffect(() => {
-    let interval;
-    const checkReady = async () => {
-      try {
-        const res = await axios.get('/ready');
-        setBackendReady(res.data.ready);
-        setBackendStateInfo(res.data);
-        if (res.data.ready && interval) {
-          clearInterval(interval);
-        }
-      } catch (err) {
-        if (err.response?.data) {
-          setBackendReady(false);
-          setBackendStateInfo(err.response.data);
-        }
-      }
-    };
-    checkReady();
-    interval = setInterval(checkReady, 1000);
-    return () => clearInterval(interval);
-  }, []);
+  // Backend Readiness State is now passed as props from App.jsx
 
   const appendLog = useCallback((message, level = 'info') => {
     setLogs((prev) => [...prev, createLog(message, level)]);
@@ -368,7 +343,8 @@ function Dashboard() {
     setProcessing(false);
   }, [resetState]);
 
-  const isSubmitDisabled = processing || !backendReady;
+  const isFormDisabled = processing;
+  const isStartDisabled = processing || !backendReady;
 
   // Build ordered pipeline steps based on active toggles
   const activePipelineSteps = PIPELINE_LABELS.filter(({ key }) => features[key]);
@@ -398,7 +374,7 @@ function Dashboard() {
                   <button
                     type="button"
                     onClick={() => setMode('offline')}
-                    disabled={isSubmitDisabled}
+                    disabled={isFormDisabled}
                     className={`
                       flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold
                       transition-all duration-200
@@ -406,7 +382,7 @@ function Dashboard() {
                         ? 'bg-brand-600 text-white shadow-md'
                         : 'text-slate-400 hover:text-slate-200 hover:bg-surface-700'
                       }
-                      ${isSubmitDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
+                      ${isFormDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
                     `}
                   >
                     Offline Video
@@ -414,7 +390,7 @@ function Dashboard() {
                   <button
                     type="button"
                     onClick={() => setMode('live')}
-                    disabled={isSubmitDisabled}
+                    disabled={isFormDisabled}
                     className={`
                       flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold
                       transition-all duration-200
@@ -422,7 +398,7 @@ function Dashboard() {
                         ? 'bg-brand-600 text-white shadow-md'
                         : 'text-slate-400 hover:text-slate-200 hover:bg-surface-700'
                       }
-                      ${isSubmitDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
+                      ${isFormDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
                     `}
                   >
                     Live Streaming
@@ -434,7 +410,7 @@ function Dashboard() {
               {mode === 'offline' && (
                 <VideoInputPanel
                   onSourceReady={setInputSource}
-                  disabled={isSubmitDisabled}
+                  disabled={isFormDisabled}
                   externalError={sourceError}
                 />
               )}
@@ -444,26 +420,26 @@ function Dashboard() {
                 <div className="space-y-4">
                   <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Live Input Source</p>
                   <div className="flex gap-4">
-                    <label className={`flex items-center gap-2 cursor-pointer ${isSubmitDisabled ? 'opacity-50' : ''}`}>
+                    <label className={`flex items-center gap-2 cursor-pointer ${isFormDisabled ? 'opacity-50' : ''}`}>
                       <input 
                         type="radio" 
                         name="liveInput" 
                         value="webcam" 
                         checked={liveInputType === 'webcam'}
                         onChange={() => setLiveInputType('webcam')}
-                        disabled={isSubmitDisabled}
+                        disabled={isFormDisabled}
                         className="text-brand-500 bg-surface-800 border-surface-600 focus:ring-brand-500"
                       />
                       <span className="text-sm font-medium text-slate-300">Webcam</span>
                     </label>
-                    <label className={`flex items-center gap-2 cursor-pointer ${isSubmitDisabled ? 'opacity-50' : ''}`}>
+                    <label className={`flex items-center gap-2 cursor-pointer ${isFormDisabled ? 'opacity-50' : ''}`}>
                       <input 
                         type="radio" 
                         name="liveInput" 
                         value="url" 
                         checked={liveInputType === 'url'}
                         onChange={() => setLiveInputType('url')}
-                        disabled={isSubmitDisabled}
+                        disabled={isFormDisabled}
                         className="text-brand-500 bg-surface-800 border-surface-600 focus:ring-brand-500"
                       />
                       <span className="text-sm font-medium text-slate-300">Stream URL</span>
@@ -478,7 +454,7 @@ function Dashboard() {
                         className="w-full bg-surface-800 border border-surface-600 rounded-xl px-4 py-3 text-sm text-slate-200 focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-all placeholder:text-slate-500"
                         value={liveUrl}
                         onChange={(e) => setLiveUrl(e.target.value)}
-                        disabled={isSubmitDisabled}
+                        disabled={isFormDisabled}
                         required
                       />
                     </div>
@@ -493,7 +469,7 @@ function Dashboard() {
               <FeaturePanel
                 features={features}
                 onChange={setFeatures}
-                disabled={isSubmitDisabled}
+                disabled={isFormDisabled}
               />
               {featureError && (
                 <p className="text-xs text-rose-400 flex items-center gap-1">
@@ -572,7 +548,7 @@ function Dashboard() {
                 <button
                   id="start-processing-btn"
                   type="submit"
-                  disabled={isSubmitDisabled}
+                  disabled={isStartDisabled}
                   className="btn-primary flex-1"
                 >
                   {processing ? (

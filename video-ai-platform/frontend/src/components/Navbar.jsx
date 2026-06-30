@@ -4,7 +4,7 @@ const NAV_LINKS = [
   { label: 'Dashboard', to: '/' },
 ];
 
-function Navbar() {
+function Navbar({ backendReady }) {
   const location = useLocation();
 
   return (
@@ -40,9 +40,9 @@ function Navbar() {
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-700 border border-surface-600">
-              <span className="w-2 h-2 rounded-full bg-accent-green animate-pulse-slow" />
-              <span className="text-xs text-slate-400 font-medium">AI Ready</span>
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-700 border ${backendReady ? 'border-accent-green/30' : 'border-amber-500/30'}`}>
+              <span className={`w-2 h-2 rounded-full ${backendReady ? 'bg-accent-green' : 'bg-amber-500 animate-pulse'} `} />
+              <span className="text-xs text-slate-300 font-medium">{backendReady ? 'AI Ready' : 'Initializing'}</span>
             </div>
           </div>
         </div>
