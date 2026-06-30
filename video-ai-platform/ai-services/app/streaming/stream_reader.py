@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 from app.utils.logger import get_logger
-from app.pipeline.live_pipeline import LivePipelineManager, LiveSession, SessionState
+from app.pipeline.live_pipeline import LivePipelineManager, LiveSession, SessionState, SessionEvent
 
 logger = get_logger(__name__)
 
@@ -68,7 +68,7 @@ class URLStreamReader(BaseStreamReader):
         stream_url = self.url
         if "youtube.com" in self.url or "youtu.be" in self.url:
             if session:
-                session.transition_state(SessionState.RESOLVING_STREAM, "Resolving YouTube direct URL via yt-dlp")
+                self.pipeline_manager.publish_event(self.session_id, SessionEvent.STREAM_RESOLVE_START, "Resolving YouTube direct URL via yt-dlp")
             try:
                 import yt_dlp
                 ydl_opts = {'format': 'best', 'quiet': True}
@@ -79,18 +79,18 @@ class URLStreamReader(BaseStreamReader):
             except ImportError:
                 logger.error("[URLStreamReader] yt-dlp is not installed. YouTube URLs will fail.")
                 if session:
-                    session.transition_state(SessionState.FAILED, "yt-dlp not installed")
+                    self.pipeline_manager.publish_event(self.session_id, SessionEvent.ERROR_OCCURRED, "yt-dlp not installed")
                 return False
             except Exception as e:
                 import traceback
                 tb = traceback.format_exc()
                 logger.error(f"[URLStreamReader] Failed to extract YouTube stream: {e}\n{tb}")
                 if session:
-                    session.transition_state(SessionState.FAILED, f"yt-dlp extraction failed: {e}")
+                    self.pipeline_manager.publish_event(self.session_id, SessionEvent.ERROR_OCCURRED, f"yt-dlp extraction failed: {e}")
                 return False
 
         if session and session.current_state != SessionState.FAILED:
-            session.transition_state(SessionState.CONNECTING, "Opening stream via FFmpeg")
+            self.pipeline_manager.publish_event(self.session_id, SessionEvent.STREAM_OPEN_START, "Opening stream via FFmpeg")
             
         # Use CAP_FFMPEG to enforce the FFmpeg backend, which is best for network streams
         self._cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
@@ -116,7 +116,7 @@ class URLStreamReader(BaseStreamReader):
                         if retries >= self.max_retries:
                             logger.error(f"[URLStreamReader] Max retries reached for {self.url}. Terminating reader.")
                             if session and session.current_state != SessionState.FAILED:
-                                session.transition_state(SessionState.FAILED, "Max retries reached during stream connection")
+                                self.pipeline_manager.publish_event(self.session_id, SessionEvent.ERROR_OCCURRED, "Max retries reached during stream connection")
                             break
                         time.sleep(self.reconnect_delay)
                         continue
@@ -133,6 +133,9 @@ class URLStreamReader(BaseStreamReader):
                     time.sleep(self.reconnect_delay)
                     continue
 
+                if session.current_state == SessionState.OPENING_STREAM:
+                    self.pipeline_manager.publish_event(self.session_id, SessionEvent.FRAME_DECODED, "First frame decoded")
+
                 session.input_frames += 1
 
                 if session.frame_queue.full():
@@ -146,9 +149,9 @@ class URLStreamReader(BaseStreamReader):
                 try:
                     session.frame_queue.put(frame, timeout=0.1)
                     
-                    # First frame successfully enqueued, transition to STREAMING
-                    if session.current_state in [SessionState.RESOLVING_STREAM, SessionState.CONNECTING]:
-                        session.transition_state(SessionState.STREAMING, "First frame enqueued")
+                    # First frame successfully enqueued, transition to STREAMING (or FIRST_FRAME_ENQUEUED which starts worker)
+                    if session.current_state in [SessionState.FIRST_FRAME_DECODED]:
+                        self.pipeline_manager.publish_event(self.session_id, SessionEvent.FRAME_ENQUEUED, "First frame enqueued")
                         
                 except queue.Full:
                     pass
@@ -166,7 +169,7 @@ class URLStreamReader(BaseStreamReader):
             )
             session = self.pipeline_manager.sessions.get(self.session_id)
             if session and session.current_state != SessionState.FAILED:
-                session.transition_state(SessionState.FAILED, f"Reader thread crashed: {e}")
+                self.pipeline_manager.publish_event(self.session_id, SessionEvent.ERROR_OCCURRED, f"Reader thread crashed: {e}")
         finally:
             # Loop exited or crashed
             if self._cap:

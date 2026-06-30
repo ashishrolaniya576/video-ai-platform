@@ -18,16 +18,34 @@ logger = get_logger(__name__)
 
 
 class SessionState(Enum):
+    CREATED = "CREATED"
     INITIALIZING = "INITIALIZING"
-    LOADING_MODELS = "LOADING_MODELS"
-    READY = "READY"
     RESOLVING_STREAM = "RESOLVING_STREAM"
-    CONNECTING = "CONNECTING"
+    OPENING_STREAM = "OPENING_STREAM"
+    FIRST_FRAME_DECODED = "FIRST_FRAME_DECODED"
+    FIRST_FRAME_ENQUEUED = "FIRST_FRAME_ENQUEUED"
+    READY = "READY"
+    WORKER_STARTED = "WORKER_STARTED"
+    FIRST_FRAME_PROCESSED = "FIRST_FRAME_PROCESSED"
     STREAMING = "STREAMING"
     RECOVERING = "RECOVERING"
     FAILED = "FAILED"
-    TERMINATING = "TERMINATING"
+    STOPPING = "STOPPING"
     TERMINATED = "TERMINATED"
+
+class SessionEvent(Enum):
+    INITIALIZE = "INITIALIZE"
+    STREAM_RESOLVE_START = "STREAM_RESOLVE_START"
+    STREAM_OPEN_START = "STREAM_OPEN_START"
+    FRAME_DECODED = "FRAME_DECODED"
+    FRAME_ENQUEUED = "FRAME_ENQUEUED"
+    WORKER_STARTING = "WORKER_STARTING"
+    FRAME_PROCESSED = "FRAME_PROCESSED"
+    ENTER_STREAMING = "ENTER_STREAMING"
+    RECOVERY_START = "RECOVERY_START"
+    ERROR_OCCURRED = "ERROR_OCCURRED"
+    STOP_REQUESTED = "STOP_REQUESTED"
+    CLEANUP_COMPLETE = "CLEANUP_COMPLETE"
 
 class SessionHealth(Enum):
     HEALTHY = "HEALTHY"
@@ -47,18 +65,26 @@ class GpuHealthState(Enum):
 # Global tracking of GPU health
 GLOBAL_GPU_STATE = GpuHealthState.HEALTHY
 
-# Define valid state transitions
-VALID_TRANSITIONS = {
-    SessionState.INITIALIZING: [SessionState.LOADING_MODELS, SessionState.FAILED, SessionState.TERMINATING],
-    SessionState.LOADING_MODELS: [SessionState.READY, SessionState.FAILED, SessionState.TERMINATING],
-    SessionState.READY: [SessionState.RESOLVING_STREAM, SessionState.STREAMING, SessionState.FAILED, SessionState.TERMINATING],
-    SessionState.RESOLVING_STREAM: [SessionState.CONNECTING, SessionState.FAILED, SessionState.TERMINATING],
-    SessionState.CONNECTING: [SessionState.STREAMING, SessionState.FAILED, SessionState.TERMINATING],
-    SessionState.STREAMING: [SessionState.RECOVERING, SessionState.FAILED, SessionState.TERMINATING],
-    SessionState.RECOVERING: [SessionState.STREAMING, SessionState.FAILED, SessionState.TERMINATING],
-    SessionState.FAILED: [SessionState.TERMINATING],
-    SessionState.TERMINATING: [SessionState.TERMINATED],
-    SessionState.TERMINATED: []
+# Event transition map for centralized ownership
+STATE_MACHINE = {
+    SessionState.CREATED: {SessionEvent.INITIALIZE: SessionState.INITIALIZING},
+    SessionState.INITIALIZING: {SessionEvent.STREAM_RESOLVE_START: SessionState.RESOLVING_STREAM},
+    SessionState.RESOLVING_STREAM: {SessionEvent.STREAM_OPEN_START: SessionState.OPENING_STREAM},
+    SessionState.OPENING_STREAM: {SessionEvent.FRAME_DECODED: SessionState.FIRST_FRAME_DECODED},
+    SessionState.FIRST_FRAME_DECODED: {SessionEvent.FRAME_ENQUEUED: SessionState.FIRST_FRAME_ENQUEUED},
+    SessionState.FIRST_FRAME_ENQUEUED: {SessionEvent.WORKER_STARTING: SessionState.WORKER_STARTED},
+    SessionState.WORKER_STARTED: {SessionEvent.FRAME_PROCESSED: SessionState.FIRST_FRAME_PROCESSED},
+    SessionState.FIRST_FRAME_PROCESSED: {SessionEvent.ENTER_STREAMING: SessionState.STREAMING},
+    SessionState.STREAMING: {SessionEvent.RECOVERY_START: SessionState.RECOVERING},
+    SessionState.RECOVERING: {SessionEvent.ENTER_STREAMING: SessionState.STREAMING},
+    SessionState.STOPPING: {SessionEvent.CLEANUP_COMPLETE: SessionState.TERMINATED},
+    SessionState.FAILED: {SessionEvent.STOP_REQUESTED: SessionState.STOPPING, SessionEvent.CLEANUP_COMPLETE: SessionState.TERMINATED},
+}
+
+# Define valid fallback events that can interrupt standard flow
+INTERRUPT_EVENTS = {
+    SessionEvent.ERROR_OCCURRED: SessionState.FAILED,
+    SessionEvent.STOP_REQUESTED: SessionState.STOPPING,
 }
 
 class InvalidStateTransitionError(Exception):
@@ -91,14 +117,14 @@ def classify_cuda_error(e: Exception) -> CudaErrorCategory:
 
 class LiveSession:
     """Manages the state and queues for a single live streaming session."""
-    def __init__(self, session_id: str, request: dict, models: Dict[str, BaseModel], model_order: List[str]):
+    def __init__(self, session_id: str, request: dict, models: Dict[str, BaseModel], model_order: List[str], event_callback=None):
         # Identifiers
         self.session_id = session_id
         self.session_uuid = str(uuid.uuid4())
         self.worker_uuid = str(uuid.uuid4())
         
         # State tracking
-        self.current_state = SessionState.INITIALIZING
+        self.current_state = SessionState.CREATED
         self.created_at = time.time()
         self.updated_at = self.created_at
         self.state_history: List[Dict[str, Any]] = [{
@@ -116,6 +142,8 @@ class LiveSession:
         self.request = request
         self.models = models
         self.model_order = model_order
+        self.state_lock = threading.Lock()
+        self.event_callback = event_callback
         
         self.profiling = {
             "queue_wait": [],
@@ -143,12 +171,9 @@ class LiveSession:
         self.stage_start_time = time.time()
         
         try:
-            self.transition_state(SessionState.LOADING_MODELS, "Loading requested models")
             # Build active models list
             self.active_models = self._build_pipeline()
-            self.transition_state(SessionState.READY, "Pipeline built successfully")
         except Exception as e:
-            self.transition_state(SessionState.FAILED, f"Initialization failed: {e}")
             raise
 
     def heartbeat(self, stage: str):
@@ -156,13 +181,12 @@ class LiveSession:
         self.stage_start_time = time.time()
         self.last_heartbeat = time.time()
 
-    def transition_state(self, new_state: SessionState, reason: str = ""):
-        """Enforce strict state transitions and log history."""
-        if new_state not in VALID_TRANSITIONS.get(self.current_state, []):
-            raise InvalidStateTransitionError(
-                f"Invalid transition from {self.current_state.name} to {new_state.name}"
-            )
-            
+    def _publish_event(self, event: SessionEvent, reason: str = ""):
+        if self.event_callback:
+            self.event_callback(self.session_id, event, reason)
+
+    def change_state_unsafe(self, new_state: SessionState, reason: str = ""):
+        """Internal method called ONLY by PipelineManager."""
         prev_state = self.current_state
         self.current_state = new_state
         self.updated_at = time.time()
@@ -220,16 +244,18 @@ class LiveSession:
             
         return SessionHealth.HEALTHY
 
-    def start(self):
-        self.transition_state(SessionState.STREAMING, "Starting worker and metrics threads")
-        self.is_running = True
-        self.worker_thread = threading.Thread(target=self._inference_loop, daemon=True)
+    def start_worker(self):
+        """Starts the worker thread (called explicitly by PipelineManager after first frame)."""
+        self.worker_thread = threading.Thread(target=self._inference_loop, daemon=True, name=f"LiveWorker-{self.session_id}")
         self.worker_thread.start()
         
-        self.metrics_thread = threading.Thread(target=self._metrics_loop, daemon=True)
+        self.metrics_thread = threading.Thread(target=self._metrics_loop, daemon=True, name=f"LiveMetrics-{self.session_id}")
         self.metrics_thread.start()
         
-        logger.info(f"[Worker: {self.worker_uuid}] Live session {self.session_id} started.")
+        logger.info(f"[Worker: {self.worker_uuid}] Live session worker threads started.")
+
+    def start(self):
+        self.is_running = True
 
     def recover(self) -> bool:
         """
@@ -237,12 +263,12 @@ class LiveSession:
         Stops worker, flushes queues, clears session tensors, and restarts worker.
         """
         if self.recovery_attempts >= settings.watchdog_max_recovery_attempts:
-            self.transition_state(SessionState.FAILED, f"Exceeded max recovery attempts ({self.recovery_attempts})")
+            self._publish_event(SessionEvent.ERROR_OCCURRED, f"Exceeded max recovery attempts ({self.recovery_attempts})")
             return False
             
         self.recovery_attempts += 1
         prev_worker_uuid = self.worker_uuid
-        self.transition_state(SessionState.RECOVERING, f"Starting recovery attempt {self.recovery_attempts}")
+        self._publish_event(SessionEvent.RECOVERY_START, f"Starting recovery attempt {self.recovery_attempts}")
         
         # 1. Signal shutdown to existing worker
         self.is_running = False
@@ -280,15 +306,12 @@ class LiveSession:
         logger.info(f"[Session: {self.session_uuid}] Graceful recovery complete. Worker {prev_worker_uuid} -> {self.worker_uuid}")
         
         # 5. Restart streaming
-        self.start()
+        self.start_worker()
+        self._publish_event(SessionEvent.ENTER_STREAMING, "Recovery completed successfully")
         return True
 
     def stop(self):
-        try:
-            self.transition_state(SessionState.TERMINATING, "Stop requested")
-        except InvalidStateTransitionError:
-            # If already terminated or in a state that can't terminate gracefully, force it.
-            pass
+        self._publish_event(SessionEvent.STOP_REQUESTED, "Stop requested")
             
         self.is_running = False
         if self.worker_thread and self.worker_thread.is_alive():
@@ -303,8 +326,8 @@ class LiveSession:
             self.metrics_thread.join(timeout=2.0)
             
         try:
-            self.transition_state(SessionState.TERMINATED, "Cleanup complete")
-        except InvalidStateTransitionError:
+            self._publish_event(SessionEvent.CLEANUP_COMPLETE, "Cleanup complete")
+        except Exception:
             pass
             
         # Clear per-session model state buffers to prevent GPU/CPU memory leaks
@@ -408,6 +431,7 @@ class LiveSession:
                 if not first_frame_processed:
                     logger.info(f"[Worker: {self.worker_uuid}] First frame processed in {inf_time:.3f}s.")
                     first_frame_processed = True
+                    self._publish_event(SessionEvent.FRAME_PROCESSED, "First frame processed")
                 
                 # Add to profiling (limit to last 100 frames)
                 self.profiling["queue_wait"].append(queue_wait_time * 1000)
@@ -549,6 +573,27 @@ class LivePipelineManager:
         self._watchdog_thread = threading.Thread(target=self._watchdog_loop, daemon=True, name="WatchdogThread")
         self._watchdog_thread.start()
         logger.info("LivePipelineManager Watchdog initialized.")
+
+    def publish_event(self, session_id: str, event: SessionEvent, reason: str = ""):
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+            
+        with session.state_lock:
+            # Check interrupt events first
+            if event in INTERRUPT_EVENTS:
+                new_state = INTERRUPT_EVENTS[event]
+            else:
+                transitions = STATE_MACHINE.get(session.current_state, {})
+                new_state = transitions.get(event)
+                if not new_state:
+                    logger.error(f"[PipelineManager] Invalid transition: {session.current_state.name} -> Event({event.name}) | Session: {session_id}")
+                    return
+            
+            session.change_state_unsafe(new_state, reason)
+            
+            if new_state == SessionState.WORKER_STARTED:
+                session.start_worker()
 
     def _watchdog_loop(self):
         """Dedicated Watchdog thread to monitor all active sessions."""

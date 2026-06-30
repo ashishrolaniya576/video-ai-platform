@@ -118,7 +118,7 @@ async def generate_mjpeg_stream(session_id: str, pipeline: LivePipelineManager):
                 last_keepalive_time = 0.0 # reset on actual frame
             except queue.Empty:
                 # If stream is initializing, yield a loading frame every 1 second to prevent browser timeout
-                if session.current_state in [SessionState.RESOLVING_STREAM, SessionState.CONNECTING]:
+                if session.current_state not in [SessionState.STREAMING, SessionState.FAILED, SessionState.STOPPING, SessionState.TERMINATED]:
                     now = asyncio.get_event_loop().time()
                     if now - last_keepalive_time > 1.0:
                         last_keepalive_time = now
